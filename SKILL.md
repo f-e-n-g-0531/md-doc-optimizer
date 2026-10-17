@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Markdown 文档优化器
@@ -30,6 +30,13 @@ metadata:
 3. **语义保真**：不删除仍有效、仍被引用、或有决策价值的信息。「冗余」= 同一信息多处重复；「过时」= 有证据证明已失效。
 4. **机械可修 vs 人工确认**：能机械证明的（链接 404、文件不存在、命令跑不通、拼写/格式错误）直接改；语义模糊的（功能是否已废弃、数字是否更新）标 NEEDS_HUMAN 并附证据。
 5. **Guard Clauses**：无 .md 文件 → NO_DOCS；无可优化项 → NO_ISSUES；信息不足以判定 → 先提问或标 NEEDS_HUMAN，不脑补。
+
+## 安全与幂等（先保护，再优化）
+
+- **改动前留底**：确认 `git status` 干净，或先建分支/提交；大仓库分批处理，维护「已处理文件」清单，避免重复或漏审。
+- **只改证据点**：每次 edit 只针对已核实的行；改完用 `git diff --stat` 复核改动面，确认没有夹带无关改动。
+- **幂等验收**：完成后重跑同一套检查（lint / 链接 / 示例），应无新增问题；再跑一遍审计应得到 NO_ISSUES。
+- **可回滚**：整节/整文件删除前，先确认没有入链引用（全仓库 grep 标题与文件名）。
 
 ## 三大优化目标
 
@@ -64,6 +71,10 @@ metadata:
 - 断言性结论缺乏依据或与权威来源冲突。
 
 处理：改成与证据一致；证据不足时标 DUBIOUS 并说明，不臆断。
+
+## 中文文档补充规则
+
+英文工具（Vale / write-good / cspell）抓不到中文特有的标点、全半角、中英空格与译名问题。审计中文文档时额外套用 references/cjk-doc-rules.md：标点与空格、冗余套话、时间敏感表述、术语一致性、排版与链接细节。
 
 ## 工作流（5 阶段）
 
@@ -109,6 +120,12 @@ metadata:
 
 无问题时只返回：NO_ISSUES + 一句说明。
 
+需要被 CI 或脚本消费时，追加一个机器可读 JSON 块：
+
+~~~json
+{"files_audited": 0, "fixed": [], "needs_human": [], "no_action": []}
+~~~
+
 ## 工具编排（详见 references/tool-configs.md）
 
 | 目标 | 工具 | 作用 |
@@ -117,6 +134,7 @@ metadata:
 | 文风/冗余 | Vale + write-good/proselint/alex | 口水词、被动语态、客套、歧视用语 |
 | 链接失效 | lychee、markdown-link-check | 找 404/死链/锚点失效 |
 | 拼写 | cspell / typos | 拼写与错词 |
+| 中文专项 | zhlint / lint-md / pangu | 中文标点全半角、中英空格、术语 |
 | 文档↔代码一致 | docproof / mdoctest / Redocly respect | 核对路径/命令/版本、复跑示例 |
 
 这些是可选自动化预扫；结论永远以「读到的证据 + 运行结果」为准。
@@ -137,6 +155,7 @@ metadata:
 
 ## 深入阅读
 - references/audit-checklist.md —— 逐目标打勾清单
+- references/cjk-doc-rules.md —— 中文标点/空格/术语专项规则
 - references/sources.md —— 同领域项目/工具与出处
 - references/tool-configs.md —— 现成工具配置
 - references/drift-playbook.md —— 文档 vs 代码漂移核对

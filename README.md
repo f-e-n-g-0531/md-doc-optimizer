@@ -26,13 +26,13 @@ md-doc-optimizer 是一个「文档瘦身 + 事实核对」的可复用 Agent �
 
 在 DSH 中直接说：
 
-~~~
+~~~text
 用 md-doc-optimizer 清理/优化 <路径或仓库> 的文档
 ~~~
 
 或描述需求，例如：
 
-~~~
+~~~text
 把 README 与当前代码对齐；检查 docs 里失效的链接和命令
 ~~~
 
@@ -42,13 +42,13 @@ md-doc-optimizer 是一个「文档瘦身 + 事实核对」的可复用 Agent �
 
 把本目录放到用户技能目录下（与 code-refactor-prompts、serenity-skill 同级）：
 
-~~~
+~~~text
 ~/.dsh/skills/md-doc-optimizer/
 ~~~
 
 Windows 下为：
 
-~~~
+~~~text
 C:\Users\<用户名>\.dsh\skills\md-doc-optimizer\
 ~~~
 
@@ -58,7 +58,7 @@ C:\Users\<用户名>\.dsh\skills\md-doc-optimizer\
 
 本技能遵循通用 SKILL.md（frontmatter + 正文）格式，可直接安装到任意支持该格式的 Agent 技能目录，例如：
 
-~~~
+~~~text
 ~/.claude/skills/md-doc-optimizer/
 ~~~
 
@@ -72,7 +72,7 @@ git clone https://github.com/f-e-n-g-0531/md-doc-optimizer.git
 
 ## 目录结构
 
-~~~
+~~~text
 md-doc-optimizer/
 ├── SKILL.md                      # 主体：三大目标 + 证据优先 5 阶段工作流
 ├── README.md
@@ -80,6 +80,7 @@ md-doc-optimizer/
 ├── references/
 │   ├── sources.md                # 同领域项目/工具调研（含出处）
 │   ├── audit-checklist.md        # 逐目标检查清单
+│   ├── cjk-doc-rules.md          # 中文标点/空格/术语专项规则
 │   ├── tool-configs.md           # markdownlint / Vale / lychee / cspell / CI 配置
 │   ├── drift-playbook.md         # 文档↔代码漂移核对
 │   └── prompting-templates.md    # 可复用提示词模板
@@ -97,6 +98,7 @@ md-doc-optimizer/
 | 文风/冗余 | Vale + write-good / proselint / alex |
 | 链接失效 | lychee、markdown-link-check |
 | 拼写 | cspell、typos |
+| 中文专项 | zhlint、lint-md、pangu |
 | 文档↔代码一致 | docproof、mdoctest、Redocly respect |
 
 工具只做「预扫候选清单」，最终结论仍以证据与运行结果为准。
