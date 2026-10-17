@@ -7,7 +7,8 @@
 一个用于**审计并优化项目 Markdown 文档**的 Agent Skill：**去冗余 · 删过期失效 · 纠事实不符**。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Format: SKILL.md](https://img.shields.io/badge/format-SKILL.md-orange)](#)
+[![Format: SKILL.md](https://img.shields.io/badge/format-SKILL.md-orange)](./SKILL.md)
+[![CI](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml/badge.svg)](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml)
 
 </div>
 

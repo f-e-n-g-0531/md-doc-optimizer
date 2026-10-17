@@ -1,0 +1,42 @@
+name: docs-qa
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.md"
+      - "**.markdown"
+      - ".markdownlint.yml"
+      - "lychee.toml"
+      - ".github/workflows/docs-qa.yml"
+  pull_request:
+    paths:
+      - "**.md"
+      - "**.markdown"
+      - ".markdownlint.yml"
+      - "lychee.toml"
+      - ".github/workflows/docs-qa.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  docs-qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: markdownlint
+        run: npx --yes markdownlint-cli2 "**/*.md"
+
+      - name: check-links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --config ./lychee.toml --no-progress
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,39 @@
+# markdownlint config for this repository
+# 保留有意义的结构规则，关闭与中文文档习惯冲突的纯风格规则。
+default: true
+
+# 行长度交给格式化工具；长链接/中文行不强制
+MD013: false
+
+# 标题/列表周围的空行：中文「冒号 + 列表」惯用写法，不强制
+MD022: false
+MD032: false
+
+# 重复标题：只查兄弟层级（允许不同章节下同名小节）
+MD024:
+  siblings_only: true
+
+# 多一级标题在长文档中允许
+MD025:
+  front_matter_title: ""
+
+# 允许内联 HTML（README 居中徽章区）
+MD033: false
+
+# 允许裸 URL（references/sources.md 的工具清单）
+MD034: false
+
+# 允许用强调代替标题
+MD036: false
+
+# 允许无语言标注的围栏代码块（纯文本示例/目录树）
+MD040: false
+
+# 首行不必是顶级标题
+MD041: false
+
+# 不强制代码围栏风格
+MD048: false
+
+# 不强制表格分隔行空格一致性
+MD060: false
