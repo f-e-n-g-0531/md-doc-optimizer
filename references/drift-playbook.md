@@ -46,6 +46,7 @@
 - 脚本与发布钩子：package.json 的 `docs:*` / `prepublish`、Makefile、CI 的 docs 任务、`scripts/gen-*.mjs`；
 - 结构特征：README 与 `docs/index.md` 高度相似但略有差异；文件头有 "generated" 标记；
 - git 历史：`git log --stat` 显示某次提交只改生成物、没改源文件 → 有人手改了生成物。
+- 预扫脚本的 `near-duplicate-files` 候选：两个文件行集合高度相似时，优先怀疑「生成副本/复制粘贴」关系，再按生成关系核对。
 
 核对与处置：
 

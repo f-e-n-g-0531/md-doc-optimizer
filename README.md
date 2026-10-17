@@ -89,7 +89,9 @@ md-doc-optimizer/
 │   ├── docs-qa.yml               # CI：markdownlint + 链接 + 自洽检查 + Schema 校验
 │   └── release.yml               # 推送 v* 标签或手动触发时发布 Release
 ├── scripts/
-│   └── check-docs.mjs            # 版本号 / 引用 / README 目录树自洽检查
+│   ├── check-docs.mjs            # 版本号 / 引用 / README 目录树自洽检查
+│   ├── pre-scan.mjs              # 候选预扫：本地链接/锚点/重复/时间词等（只报候选）
+│   └── pre-scan.test.mjs         # 预扫脚本自测（CI 门禁）
 ├── references/
 │   ├── sources.md                # 同领域项目/工具调研（含出处）
 │   ├── audit-checklist.md        # 逐目标检查清单
@@ -111,16 +113,19 @@ md-doc-optimizer/
 
 ## 质量门禁（本仓库 CI）
 
-[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 每次推送 / PR 自动跑四道检查：
+[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 每次推送 / PR 自动跑五道检查：
 
 | 检查 | 命令 | 作用 |
 | --- | --- | --- |
 | 结构 lint | `npx markdownlint-cli2 "**/*.md"` | 标题层级、围栏、表格等结构问题 |
 | 链接检查 | `lychee --config ./lychee.toml --no-progress "**/*.md"` | 失效链接 |
 | 自洽检查 | `node scripts/check-docs.mjs` | SKILL.md 版本 == CHANGELOG 最新版本；引用的文件都存在；README 目录树与实际文件同步 |
+| 预扫自测 | `node scripts/pre-scan.test.mjs` | 预扫脚本行为回归（临时夹具覆盖各类候选检测） |
 | 报告契约 | `npx ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"` | 机器可读报告（样例 + 两份真实案例）符合 JSON Schema |
 
 推送 `v*` 标签（或手动触发 release 工作流）会先过同一套检查，再发布 GitHub Release。
+
+仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON（`--text` 为人读摘要），供 P2 收集候选用。**候选必须再人工核对，不是结论。**
 
 ## 实测案例（真实仓库，报告模式）
 

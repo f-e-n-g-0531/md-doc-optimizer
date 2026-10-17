@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0 (2026-10-18)
+
+- 新增 scripts/pre-scan.mjs：零依赖、只读的候选预扫工具，输出确定性 JSON 候选（本地死链/锚点、硬编码 master 分支链接、URL 粘连全角标点、时间敏感词、占位标记、重复标题/段落、多 H1、疑似生成副本），并标记 fixture 上下文。
+- 新增 scripts/pre-scan.test.mjs 自测：临时夹具覆盖各类候选、代码围栏/内联代码不误报、排序与汇总一致性、退出码；CI 增加 pre-scan self-test 步骤。
+- SKILL.md P2 增加「先跑内置预扫脚本」，工具编排表与报告模式（落地入口）同步更新。
+- references/reporting.md 新增 2.2「报告落地（report → apply）」：确认后逐条应用、复验、更新 fixed/keep/annotate 计数，并说明预扫输出只是 P3 输入。
+- references/tool-configs.md 新增预扫脚本章节（用法、候选类型、JSON 结构、fixture 边界）。
+- references/drift-playbook.md 第 6 节补充 near-duplicate-files 候选作为生成/拷贝关系线索。
+- README 目录结构、质量门禁（五道检查）与预扫用法同步更新。
+
 ## 1.5.0 (2026-10-18)
 
 - 新增两份真实仓库审计案例：examples/case-study-docproof.md、examples/case-study-zhlint.md，均为报告模式（只读、未向上游提交），含建议 diff、逐条证据与「判定不改」的边界说明。

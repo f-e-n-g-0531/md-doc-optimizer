@@ -63,6 +63,17 @@ npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -
 
 Schema 强制约束：`summary` 五个计数字段必填；每条 finding 的 `file`/`line`/`category`/`severity`/`action`/`evidence` 必填；`action` 为 `replace` 时 `replacement` 必须是非空字符串。
 
+### 2.2 报告落地（report → apply）
+
+用户确认建议 diff 后按以下顺序落地，避免报告与仓库脱节：
+
+1. 逐条应用 `replacement`（最小 diff），不夹带其他改动。
+2. 重跑 P5 验收（lint / 链接 / 示例），确认没有引入新失效。
+3. 更新报告 JSON：已落地条目计入 `summary.fixed`；用户拒绝的改成 `action=keep` 并在 `evidence` 写明原因；仍待确认的保持 `annotate`。
+4. 用第 5 节的 PR/commit 模板交付；PR 描述里给出「原句 → 新句 → 证据」。
+
+预扫脚本（scripts/pre-scan.mjs）的输出只是 P3 的输入候选，不是 findings；逐条核对后才写入报告。
+
 ## 3. NEEDS_HUMAN 写法
 
 统一四段式，便于人工快速判断：

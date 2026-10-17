@@ -162,6 +162,40 @@ lychee --config ./lychee.toml --no-progress "**/*.md"
 - mdoctest（语言无关）：`mdoctest README.md`（加 `--fix` 自动更新失效输出）
 - markdown-doctest（JS 生态）：只执行 JS 示例验证不抛异常，不比对输出：`npx markdown-doctest README.md`
 
+## 内置预扫脚本（scripts/pre-scan.mjs）
+
+零依赖、只读的候选生成器，用于 P2：不访问网络、不修改目标仓库，输出确定性的 JSON 候选清单。候选必须再按 SKILL.md 的 P3 逐条核对，不能直接当结论。
+
+~~~bash
+node scripts/pre-scan.mjs <目标目录>          # 输出 JSON 候选清单
+node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
+~~~
+
+覆盖的候选类型（kind / 类别）：
+
+| kind | 类别 | 说明 |
+|---|---|---|
+| broken-local-link | B | 相对路径链接指向不存在的文件（图片链接暂不检查） |
+| broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在 |
+| default-branch-master-link | B | GitHub 链接硬编码 `/tree/master/` 或 `/blob/master/`，需核对默认分支 |
+| trailing-fullwidth-after-url | C | URL 后粘连全角括号/引号，常导致 404 |
+| stale-time-phrase | B | currently / recently / soon / 目前 / 最近 等时间敏感词 |
+| placeholder-marker | B | TODO / TBD / 待补充 / coming soon 等占位 |
+| duplicate-heading | A | 同文件内同层级同名标题 |
+| duplicate-paragraph | A | 同文件内重复段落 |
+| multiple-h1 | A | 一个文件多个一级标题 |
+| near-duplicate-files | A | 两个文件行集合高度相似，疑似拷贝或生成副本 |
+
+输出结构：`{tool, schema_version, target, files_scanned, candidates[], summary{total, by_kind, by_category}}`；candidates 按 file/line/kind 排序，便于 diff。
+
+`near-duplicate-files` 为两两文件比较（O(n²)）：数千个 Markdown 的大仓库会偏慢，可先对 docs/ 等子目录分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
+
+自测：`node scripts/pre-scan.test.mjs`（CI 会跑）。
+
+注意：规则文档会引用候选词表本身（如本 skill 的 SKILL.md 写了「目前/最近/TODO」），因此对本仓库运行会得到一批预期内的候选噪音；这类命中应 triage 为 no action，不影响扫描器价值。
+
+2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。
+
 ## GitHub Actions —— 组合检查（自包含版）
 
 文件 `.github/workflows/docs-qa.yml`。markdownlint、链接检查、文档自洽检查与报告 Schema 校验是必过门禁；Vale 需先备好风格包，默认注释掉，按需启用。
