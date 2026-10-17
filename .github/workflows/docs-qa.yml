@@ -36,7 +36,7 @@ jobs:
       - name: check-links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --config ./lychee.toml --no-progress
+          args: --config ./lychee.toml --no-progress '**/*.md'
           fail: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

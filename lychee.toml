@@ -1,8 +1,6 @@
 # lychee broken-link checker config
 # https://github.com/lycheeverse/lychee
 
-files = ["**/*.md"]
-
 # 只把以下状态视为可达（403/429 常见于反爬与限流，视为可达）
 accept = ["200", "201", "202", "204", "301", "302", "304", "403", "429"]
 
