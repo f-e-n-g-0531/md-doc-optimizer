@@ -1,0 +1,121 @@
+{
+  "summary": {
+    "files_audited": 4,
+    "examined": 11,
+    "fixed": 0,
+    "needs_human": 2,
+    "no_action": 4
+  },
+  "findings": [
+    {
+      "file": "RELEASING.md",
+      "line": 43,
+      "category": "C",
+      "severity": "High",
+      "action": "replace",
+      "excerpt": "`version` in pyproject.toml must already be the new number",
+      "evidence": "pyproject.toml:13 `dynamic = [\"version\"]`（无 project.version 键）；pyproject.toml:43-44 `[tool.hatch.version] path = \"src/docproof/__init__.py\"`；src/docproof/__init__.py:3 `__version__ = \"0.2.4\"`；.github/workflows/release.yml:56-76 的发布门禁按 hatch 路径读取 __version__，而非 project.version",
+      "replacement": "# `__version__` in src/docproof/__init__.py must already be the new number, and the commit must be on main"
+    },
+    {
+      "file": "RELEASING.md",
+      "line": 52,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "| tag vs `pyproject.toml` |",
+      "evidence": "同 4.1：版本号实际来自 src/docproof/__init__.py，pyproject.toml 只通过 [tool.hatch.version] 声明路径；release.yml:61-72 先用 tomllib 读该路径，再读 __version__ 行",
+      "replacement": "| tag vs `src/docproof/__init__.py`（版本文件路径由 pyproject.toml 的 `[tool.hatch.version]` 指定） |"
+    },
+    {
+      "file": "RELEASING.md",
+      "line": 122,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "The workflow checks the tag against `pyproject.toml`",
+      "evidence": "release.yml:61-63 读取 pyproject 的 `tool.hatch.version.path`，再在 :70-76 从该文件读取 __version__ 与 tag 比较；直接说“against pyproject.toml”会误导读者以为版本号写在 pyproject",
+      "replacement": "The workflow reads the version-source path from `pyproject.toml` and checks the tag against the `__version__` line it contains"
+    },
+    {
+      "file": "README.md",
+      "line": 293,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "docproof actually going up on PyPI on 24 August 2026",
+      "evidence": "PyPI JSON：0.2.1 upload_time=2026-08-21T18:48Z（+08 为 8 月 22 日）、0.2.3=2026-08-24T15:53Z、0.2.4=2026-08-31T08:19Z；git d3c10bc（2026-08-22）“0.2.1, which exists so that pip install docproof resolves”；RELEASING.md:71-75 亦写 0.2.1–0.2.3 发布时 README 仍称未上 PyPI、0.2.4 才修",
+      "replacement": "docproof actually going up on PyPI with 0.2.1 on 22 August 2026"
+    },
+    {
+      "file": "README.md",
+      "line": 126,
+      "category": "A",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "Both lines are load-bearing ... Measured on `pallets/click` ... permanently green gate that had judged nothing",
+      "evidence": "README.md:126-132 与 README.md:284-289 近逐字重复（同一 pallets/click 测量、同一 “permanently green gate that had judged nothing” 表述）；126-132 已用 [Requirements](#requirements) 指向专节",
+      "replacement": "**Both lines are load-bearing.** `actions/checkout` gives you depth 1 unless you ask otherwise, and a shallow clone cannot tell a deleted file from one that never existed. [Requirements](#requirements) has the measurement, the failure mode, and the rest."
+    },
+    {
+      "file": "README.md",
+      "line": 344,
+      "category": "B",
+      "severity": "Medium",
+      "action": "keep",
+      "excerpt": "A clean verdict over five per cent of a repository is not a clean repository",
+      "evidence": "审计期间本机两次 fetch 失败；2026-10-18 复测（含同域根路径 https://log.wecanuseai.com/）均返回 200，链接有效；按「不可达≠失效」保留，不改",
+      "replacement": null
+    },
+    {
+      "file": "README.md",
+      "line": 178,
+      "category": "C",
+      "severity": "Low",
+      "action": "annotate",
+      "excerpt": "Measured, rather than hoped: sixteen well-known projects ... produced one finding",
+      "evidence": "该测量依赖 16 个外部仓库当时的快照，仓库内无日期、无复跑脚本；无法用代码或当前环境复核，按「无法复核的断言」标 NEEDS_HUMAN",
+      "replacement": null
+    },
+    {
+      "file": "FINDINGS.md",
+      "line": 77,
+      "category": "B",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "Verified by hand against the GitHub API on 2026-08-31",
+      "evidence": "带日期的历史快照；同段已声明 watcher 已停止、计数会随维护者动作失效——历史记录职责，按判断边界不改",
+      "replacement": null
+    },
+    {
+      "file": "README.md",
+      "line": 43,
+      "category": "B",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "The block is left uncorrected because it is a real run",
+      "evidence": "作者明确声明示例输出刻意保留原样，属演示性内容；修正它会变成伪造的运行记录，按判断边界不改",
+      "replacement": null
+    },
+    {
+      "file": "RELEASING.md",
+      "line": 97,
+      "category": "B",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "The name is free, checked 2026-08-18: ... returns 404",
+      "evidence": "2026-10-18 复核 https://github.com/marketplace/actions/docproof 仍返回 404，原断言仍成立；带日期的检查记录无需更新",
+      "replacement": null
+    },
+    {
+      "file": "RELEASING.md",
+      "line": 81,
+      "category": "C",
+      "severity": "Low",
+      "action": "annotate",
+      "excerpt": "`0.1.0` and `Development Status :: 3 - Alpha` are meant literally",
+      "evidence": "当前版本为 0.2.4（src/docproof/__init__.py:3、远端 tag v0.2.4、README pin 一致）；该句为 0.1.0 时期的成熟度声明沿用还是漏更新属语义决策，默认建议 0.1.0 → 0.x，不静默改",
+      "replacement": null
+    }
+  ]
+}

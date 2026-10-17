@@ -51,13 +51,14 @@
 - 同一行有多个问题合并为一条 finding，证据列全。
 - `evidence` 禁止「我觉得 / 可能 / 大概」式表述，必须是路径、命令、提交号或 URL。
 - 行号以审计时的文件内容为准；文件已被改动时重新定位后再输出。
+- 报告模式（只报告不改）下 `fixed` 记 0：`action` 为 `replace`/`delete` 表示建议改法，`replacement` 给出建议文本；用户确认落地后，再把对应条目标为已修并计入 `fixed`。
 
 ### 2.1 JSON Schema 与机器校验
 
 契约以 references/report.schema.json（JSON Schema 2020-12）为准，示例见 examples/report.sample.json。CI 会校验：
 
 ~~~bash
-npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json
+npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"
 ~~~
 
 Schema 强制约束：`summary` 五个计数字段必填；每条 finding 的 `file`/`line`/`category`/`severity`/`action`/`evidence` 必填；`action` 为 `replace` 时 `replacement` 必须是非空字符串。

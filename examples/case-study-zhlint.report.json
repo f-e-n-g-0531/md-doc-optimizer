@@ -1,0 +1,171 @@
+{
+  "summary": {
+    "files_audited": 14,
+    "examined": 16,
+    "fixed": 0,
+    "needs_human": 0,
+    "no_action": 5
+  },
+  "findings": [
+    {
+      "file": "docs/index.md",
+      "line": 31,
+      "category": "C",
+      "severity": "High",
+      "action": "replace",
+      "excerpt": "源文件仍为 zhlint <file-pattern>（README 已改成 [, ...]）",
+      "evidence": "scripts/gen-readme.mjs:27,33 从 docs/index.md 生成 README.md；package.json:40 docs:readme、:44 prepublish 会重跑生成；git show 0ebe7ea --stat 只改 README.md/README.zh-CN.md/bin/index.js，未改 docs/index.md；重跑生成会把 README 的 [, ...] 覆盖回旧语法",
+      "replacement": "# glob files, lint them, and print validation report,\n# and exit with code `1` if there is any error found.\nzhlint <file-pattern>[, ...]\n\n# glob files and fix their all possilbly found errors.\nzhlint --fix <file-pattern>[, ...]"
+    },
+    {
+      "file": "docs/index.md",
+      "line": 153,
+      "category": "B",
+      "severity": "High",
+      "action": "replace",
+      "excerpt": "`dist/zhlint.js` as a standalone version",
+      "evidence": "vite.config.ts:13-14 构建产出 zhlint.es.js + zhlint.umd.js；package.json:10-11 unpkg/jsdelivr 指向 ./dist/zhlint.umd.js；unpkg.com/zhlint@0.8.2/dist/zhlint.js 404、dist/zhlint.umd.js 200；jsdelivr 0.8.2 文件树只有 es/umd 两种；README.md:141、README.zh-CN.md:141 同源",
+      "replacement": "You could find a JavaScript file `dist/zhlint.umd.js` as a standalone version. To use it, for example, you can directly add it into your browser as a `<script>` tag. Then there would be a global variable `zhlint` for you."
+    },
+    {
+      "file": "docs/index.md",
+      "line": 164,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "fixed text content as `value`",
+      "evidence": "src/run.ts:32-39 Result 字段为 result: string，:169-174 返回 result；同文档 docs/index.md:224 Output 一节写 result；README.md 示例用 output.result；docs/index.md:241、README.md:229、README.zh-CN.md:152/229 同源",
+      "replacement": "The result of a single piece of input string. It contains fixed text content as `result` and the info of all `validations`."
+    },
+    {
+      "file": "docs/index.md",
+      "line": 186,
+      "category": "B",
+      "severity": "High",
+      "action": "replace",
+      "excerpt": "tree/master/src/hypers/ignore.js / md.js / hexo.js（3 个失效链接）",
+      "evidence": "3 个 URL 实测 404；仓库默认分支为 main（origin/HEAD → main），对应文件为 src/hypers/ignore.ts、md.ts、hexo.ts；改为 blob/main/.../*.ts 后实测 200；README.md:174、README.zh-CN.md:174 与 docs/index.md:186 合计 9 处",
+      "replacement": "- `hyperParse`: customize the hyper parser by their names. It could be `undefined` which means just use default [ignored cases parser](https://github.com/zhlint-project/zhlint/blob/main/src/hypers/ignore.ts), [Markdown parser](https://github.com/zhlint-project/zhlint/blob/main/src/hypers/md.ts) and the [Hexo tags parser](https://github.com/zhlint-project/zhlint/blob/main/src/hypers/hexo.ts)."
+    },
+    {
+      "file": "docs/index.md",
+      "line": 285,
+      "category": "B",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "Supported preproccessors 只列 ignore / hexo / markdown",
+      "evidence": "src/options.ts:31-35 注册 ignore、hexo、vuepress、markdown 四个预处理器，:108 默认全部启用；docs/index.md:186 的默认解析器描述同样漏了 vuepress",
+      "replacement": "## Supported preproccessors (hyper parsers)\n\n- `ignore`: find all ignored pieces by the HTML comment `<!-- zhlint ignore: ... -->`\n- `hexo`: find all Hexo tags to avoid them being parsed.\n- `vuepress`: handle VuePress custom containers and Markdown extensions.\n- `markdown`: parse by markdown syntax and find all block-level texts and inline-level marks."
+    },
+    {
+      "file": "docs/index.md",
+      "line": 276,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "run(str, { ignoredCases: { textStart: ..., textEnd: ... } })",
+      "evidence": "src/options.ts:11 类型为 ignoredCases?: IgnoredCase[]；src/ignore.ts:27 直接 ignoredCases.forEach，传对象会在运行时抛错；README.md 生成同源",
+      "replacement": "run(str, { ignoredCases: [{ textStart: '( ', textEnd: ' )' }] })"
+    },
+    {
+      "file": "docs/index.md",
+      "line": 202,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "Output 类型块缺 result，Validation 缺 name/target",
+      "evidence": "src/run.ts:32-39 Result 有 result: string、disabled?: boolean；src/report.ts:63-74 Validation 有 name、message、index、length、target；文档类型块与源码不符",
+      "replacement": "type Result = {\n  file?: string\n  disabled?: boolean\n  origin: string\n  result: string\n  validations: Validation[]\n}\n\ntype Validation = {\n  name: string\n  message: string\n  index: number\n  length: number\n  target: ValidationTarget\n}"
+    },
+    {
+      "file": "docs/index.md",
+      "line": 96,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "const { run, report } = require('zhlint')",
+      "evidence": "package.json:8 \"type\": \"module\"；tsconfig-build.json:6 module NodeNext；已发布 lib/index.js 为 ESM export；包未声明 engines，CommonJS require 只在支持 require(esm) 的 Node 版本可用；docs/index.md:134、README.md 同源",
+      "replacement": "import { run, report } from 'zhlint'"
+    },
+    {
+      "file": "docs/contribute.md",
+      "line": 22,
+      "category": "B",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "build:js / build:type / format / docs（这些脚本不存在）",
+      "evidence": "package.json:22-43 实际 scripts：build、build:node、build:browser、lint、lint:fix、lint:eslint、test、test:tsc、test:vitest、coverage、docs:dev/runtime/readme/build/serve/deploy；build:js、build:type、format、docs 均不存在",
+      "replacement": "Build\n\n- `build` (runs `build:node` then `build:browser`)\n  - `build:node`\n  - `build:browser`\n\nLint and test\n\n- `lint`\n- `lint:fix`\n- `lint:eslint`\n- `test` (`test:tsc` + `test:vitest`)\n- `coverage`"
+    },
+    {
+      "file": "docs/contribute.md",
+      "line": 44,
+      "category": "C",
+      "severity": "Medium",
+      "action": "replace",
+      "excerpt": "Bin: ./bin/index.js (CJS); Type defs: ./dist/zhlint.d.ts; vite.config.js",
+      "evidence": "package.json:8 \"type\": \"module\"（bin/lib 均为 ESM）；package.json:12 types: ./lib/index.d.ts；tsconfig-build.json:10,12 declaration + outDir lib；实际配置文件为 vite.config.ts",
+      "replacement": "- Bin: `./bin/index.js` (ESM)\n- Node.js: `./lib/index.js` (ESM)\n- Unpkg/Jsdelivr: `./dist/zhlint.umd.js` (UMD)\n- Type defs: `./lib/index.d.ts`\n- Build config: `tsconfig-build.json`, `vite.config.ts`"
+    },
+    {
+      "file": "docs/index.md",
+      "line": 308,
+      "category": "C",
+      "severity": "Low",
+      "action": "replace",
+      "excerpt": "default preset: `()` / skipAbbrs 写 `a.k.a`",
+      "evidence": "src/rules/index.ts:50 halfwidthPunctuation 默认 ()[]{}；:80 skipAbbrs 为 a.k.a.（带点）；文档 docs/index.md:308、:368 与之不符",
+      "replacement": "// default preset: `()[]{}`\n// `['Mr.','Mrs.','Dr.','Jr.','Sr.','vs.','etc.','i.e.','e.g.','a.k.a.']`"
+    },
+    {
+      "file": "test/example-units.md",
+      "line": 3,
+      "category": "A",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "`TODO: should be mark-type：a__[b](x)__c ...`",
+      "evidence": "测试夹具：被 test/examples.test.ts 作为输入引用，(x)/(y) 与 TODO 是断言对象；修改会破坏测试，按判断边界不改",
+      "replacement": null
+    },
+    {
+      "file": "test/example-units-fixed.md",
+      "line": 3,
+      "category": "A",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "`TODO: should be mark-type：...`",
+      "evidence": "同上，是测试夹具的「修复后」期望输出，链接与 TODO 为内容本身",
+      "replacement": null
+    },
+    {
+      "file": "test/example-article.md",
+      "line": 11,
+      "category": "B",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "single-file-components.html 等相对链接",
+      "evidence": "测试夹具（引自 Vue 文档的样例文章），相对链接在夹具语境中无意义，不属于仓库对外文档",
+      "replacement": null
+    },
+    {
+      "file": "docs/design.md",
+      "line": 48,
+      "category": "B",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "<!-- TODO: an example -->",
+      "evidence": "设计文档中的 WIP 注释，design.md:240 明确声明该部分可能过时；属计划内容，按判断边界不改",
+      "replacement": null
+    },
+    {
+      "file": "README.md",
+      "line": 119,
+      "category": "A",
+      "severity": "Low",
+      "action": "keep",
+      "excerpt": "#### Advanced usage（第二处同名标题）",
+      "evidence": "两处同名 H4 分属 `### As CLI` 与 `### As Node.js package` 两个不同父节点，不是同级重复标题，属有意的结构",
+      "replacement": null
+    }
+  ]
+}

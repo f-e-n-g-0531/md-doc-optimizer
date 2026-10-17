@@ -198,9 +198,9 @@ jobs:
       - name: docs consistency
         run: node scripts/check-docs.mjs
 
-      # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/report.sample.json）
+      # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/*.json）
       - name: validate report schema
-        run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json
+        run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"
 
       - name: check-links
         uses: lycheeverse/lychee-action@v2

@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.4.0"
+  version: "1.5.0"
 ---
 
 # Markdown 文档优化器
@@ -42,7 +42,8 @@ metadata:
 
 「证据优先」也意味着：证据不足或不该动的地方，保持原样。
 
-- **生成物**：docs 由代码/脚本/schema 生成时，改生成器或源文件，不改产物；无法确定来源时只报问题。
+- **生成物**：docs 由代码/脚本/schema 生成时（找 `docs:*` / `prepublish` 等生成脚本、Makefile、CI 生成步骤），改源文件后重新生成，不改产物；生成物与源文件不一致，按漂移报告。
+- **测试夹具与示例数据**：test/、fixtures/ 等位置被测试引用的 Markdown，里面故意写坏的链接、命令、TODO 是测试内容本身，不修。
 - **有意的重复**：多平台安装命令、不同场景的示例、CLI help 与文档的同步内容，重复但各自必要，不算冗余。
 - **历史与变更记录**：CHANGELOG、迁移指南、旧版本文档、deprecation 说明——「过时」是它们的职责，不删。
 - **法律/合规文本**：LICENSE、隐私政策、安全声明、许可证声明，只报不改。
@@ -188,3 +189,4 @@ metadata:
 - references/tool-configs.md —— 现成工具配置
 - references/drift-playbook.md —— 文档 vs 代码漂移核对
 - references/prompting-templates.md —— 可复用提示词
+- examples/case-study-docproof.md、examples/case-study-zhlint.md —— 真实仓库审计实测（报告模式，含建议 diff 与判定边界）

@@ -26,6 +26,8 @@ md-doc-optimizer 是一个「文档瘦身 + 事实核对」的可复用 Agent �
 
 语言专项规则分两份：中文文档套用 [references/cjk-doc-rules.md](./references/cjk-doc-rules.md)，英文文档套用 [references/english-docs.md](./references/english-docs.md)。机器可读报告有 [JSON Schema](./references/report.schema.json)，可在 CI 里直接校验。
 
+另附两个真实仓库的审计案例（[docproof](./examples/case-study-docproof.md)、[zhlint](./examples/case-study-zhlint.md)）：报告模式下给出建议 diff、逐条证据，以及「判定不改」的边界说明。
+
 ## 快速开始
 
 在 DSH 中直接说：
@@ -99,8 +101,12 @@ md-doc-optimizer/
 │   ├── drift-playbook.md         # 文档↔代码漂移核对
 │   └── prompting-templates.md    # 可复用提示词模板
 └── examples/
-    ├── before-after.md           # 去/删/改三段式示例
-    └── report.sample.json        # 机器可读报告示例（Schema 校验用）
+    ├── before-after.md                   # 去/删/改三段式示例
+    ├── case-study-docproof.md            # 真实仓库案例：docproof（报告模式）
+    ├── case-study-docproof.report.json   # 该案例的机器可读报告（Schema 校验）
+    ├── case-study-zhlint.md              # 真实仓库案例：zhlint（报告模式）
+    ├── case-study-zhlint.report.json     # 该案例的机器可读报告（Schema 校验）
+    └── report.sample.json                # 机器可读报告示例（Schema 校验用）
 ~~~
 
 ## 质量门禁（本仓库 CI）
@@ -112,9 +118,20 @@ md-doc-optimizer/
 | 结构 lint | `npx markdownlint-cli2 "**/*.md"` | 标题层级、围栏、表格等结构问题 |
 | 链接检查 | `lychee --config ./lychee.toml --no-progress "**/*.md"` | 失效链接 |
 | 自洽检查 | `node scripts/check-docs.mjs` | SKILL.md 版本 == CHANGELOG 最新版本；引用的文件都存在；README 目录树与实际文件同步 |
-| 报告契约 | `npx ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json` | 机器可读报告符合 JSON Schema |
+| 报告契约 | `npx ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"` | 机器可读报告（样例 + 两份真实案例）符合 JSON Schema |
 
 推送 `v*` 标签（或手动触发 release 工作流）会先过同一套检查，再发布 GitHub Release。
+
+## 实测案例（真实仓库，报告模式）
+
+两份案例都跑在真实公开仓库的指定提交上，只读审计、未向上游提交改动；结论用「建议 diff + 证据 + 判定边界」呈现，并附带可由 Schema 校验的机器可读报告。
+
+| 目标 | 范围 | 结果 | 看点 |
+| --- | --- | --- | --- |
+| [docproof](https://github.com/melbinjp/docproof) @ `35e4688` | 4 个 Markdown | 审查 11 处 → 建议改 5、待人工 2、判不改 4 | 版本号位置与发布流程矛盾；PyPI 日期与元数据不符；README 两节重复测量说明；历史快照/演示输出正确排除 |
+| [zhlint](https://github.com/zhlint-project/zhlint) @ `c8678fe` | 14 个 Markdown（含生成物、翻译、测试夹具） | 审查 16 处 → 建议改 11、判不改 5 | 生成 README 被手改导致发布回归；链接错在分支名与扩展名；API 类型/模块格式与源码不符；测试夹具整类排除 |
+
+报告：[docproof JSON](./examples/case-study-docproof.report.json)、[zhlint JSON](./examples/case-study-zhlint.report.json)。
 
 ## 工具生态
 

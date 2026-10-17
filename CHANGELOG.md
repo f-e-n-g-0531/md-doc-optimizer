@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0 (2026-10-18)
+
+- 新增两份真实仓库审计案例：examples/case-study-docproof.md、examples/case-study-zhlint.md，均为报告模式（只读、未向上游提交），含建议 diff、逐条证据与「判定不改」的边界说明。
+- 新增对应机器可读报告 examples/case-study-*.report.json；CI 现在用 references/report.schema.json 校验 examples/ 下全部报告，不再只校验样例。
+- SKILL.md「判断边界」补充：生成物要先找生成脚本、改源文件后重新生成；测试夹具里的坏链接/命令/TODO 属内容本身，不改。
+- references/audit-checklist.md 反误报清单补充：生成文档识别、测试夹具排除、默认分支/文件改名导致的失效链接。
+- references/drift-playbook.md 新增第 6、7 节：生成文档的识别/核对/处置流程；链接核对的三个陷阱（默认分支、文件改名、可达≠语义匹配）。
+- references/reporting.md 明确报告模式下 fixed=0 与建议 diff 的语义。
+- README 新增「实测案例」章节，质量门禁的命令与说明同步更新。
+
 ## 1.4.0 (2026-10-18)
 
 - 新增 references/english-docs.md：英文文档专项规则（冗余套话、相对时间表述、事实核对、术语一致性、Vale/write-good/alex 结果判断、审计清单与前后对照示例）。
