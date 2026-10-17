@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Markdown 文档优化器
@@ -37,6 +37,19 @@ metadata:
 - **只改证据点**：每次 edit 只针对已核实的行；改完用 `git diff --stat` 复核改动面，确认没有夹带无关改动。
 - **幂等验收**：完成后重跑同一套检查（lint / 链接 / 示例），应无新增问题；再跑一遍审计应得到 NO_ISSUES。
 - **可回滚**：整节/整文件删除前，先确认没有入链引用（全仓库 grep 标题与文件名）。
+
+## 判断边界：什么不该改
+
+「证据优先」也意味着：证据不足或不该动的地方，保持原样。
+
+- **生成物**：docs 由代码/脚本/schema 生成时，改生成器或源文件，不改产物；无法确定来源时只报问题。
+- **有意的重复**：多平台安装命令、不同场景的示例、CLI help 与文档的同步内容，重复但各自必要，不算冗余。
+- **历史与变更记录**：CHANGELOG、迁移指南、旧版本文档、deprecation 说明——「过时」是它们的职责，不删。
+- **法律/合规文本**：LICENSE、隐私政策、安全声明、许可证声明，只报不改。
+- **演示性「错误」**：示例里故意写错的命令或输出（用来对比正误）是内容本身，不是待修错误。
+- **外部权威来源**：文档与代码冲突但文档对齐官方规范/产品决策时，标 DUBIOUS 说明分歧，不强行改成代码的样子。
+- **计划中的内容**：明确标注为规划、路线图、预览的内容，按「计划」而非「过期」处理。
+- **无法复核的断言**：无法用代码/运行/权威来源证明的结论，标 NEEDS_HUMAN，不凭语感删。
 
 ## 三大优化目标
 
@@ -126,6 +139,16 @@ metadata:
 {"files_audited": 0, "fixed": [], "needs_human": [], "no_action": []}
 ~~~
 
+字段定义、完整 JSON 契约与 PR/commit 模板见 references/reporting.md。
+
+## 报告模式（只报告不改）
+
+用户说「先出报告 / 不要改文件 / 只审查」时：
+
+- 只做 P1–P3，输出完整问题清单与建议 diff，不执行任何写操作。
+- 每条给「文件:行 + 类别 + 严重度 + 建议动作 + 证据」，可直接转为 issue 或 PR。
+- 结尾同样给汇总与结论；无问题时返回 NO_ISSUES。
+
 ## 工具编排（详见 references/tool-configs.md）
 
 | 目标 | 工具 | 作用 |
@@ -156,6 +179,7 @@ metadata:
 ## 深入阅读
 - references/audit-checklist.md —— 逐目标打勾清单
 - references/cjk-doc-rules.md —— 中文标点/空格/术语专项规则
+- references/reporting.md —— 报告字段、JSON 契约、PR/commit 模板
 - references/sources.md —— 同领域项目/工具与出处
 - references/tool-configs.md —— 现成工具配置
 - references/drift-playbook.md —— 文档 vs 代码漂移核对

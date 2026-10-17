@@ -83,6 +83,32 @@ npx pangu -f README.md > README.pangu-preview.md
 
 说明：zhlint 用 `--fix`、lint-md 用 `-f` 自动修复；接入 CI 前先按团队风格写 `.zhlintrc` / `.lintmdrc` 收敛规则，避免一次性大改。
 
+### 中文 linter 配置（保留仓库风格）
+
+`.zhlintrc` —— 保留全角括号与「」，只统一空格与标点习惯：
+
+~~~json
+{
+  "preset": "default",
+  "rules": {
+    "halfwidthPunctuation": "",
+    "unifiedPunctuation": { "default": false }
+  }
+}
+~~~
+
+`.lintmdrc` —— 关闭与仓库风格冲突的半角标点规则（`0` 关、`1` 警告、`2` 错误）：
+
+~~~json
+{
+  "rules": {
+    "no-half-width-punctuation": 0
+  }
+}
+~~~
+
+两者都**只跑检查、不跑自动修复**：实测 `zhlint --fix` 会把 `.github` 改成 `。github`、把代码里的 `"X"` 改成弯引号（见 references/cjk-doc-rules.md 第 7 节）。
+
 ## lychee —— 链接失效
 
 文件 `lychee.toml`。注意 **lychee 配置里没有 `files` 键**：输入文件由命令行位置参数或 `files_from` 指定。写成 `files = [...]` 会报 `required arguments were not provided`（本仓库接入 CI 时踩过这个坑）。

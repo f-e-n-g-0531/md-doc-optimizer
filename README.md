@@ -22,6 +22,8 @@ md-doc-optimizer 是一个「文档瘦身 + 事实核对」的可复用 Agent �
 
 核心原则：**证据优先**。任何删改都必须指向可复现证据（代码、git 历史、实际运行结果、链接状态、权威来源），绝不凭记忆或语感改写；无法确证的改动显式标 NEEDS_HUMAN，不脑补。
 
+另内置三条保护：**安全与幂等**（改动前留底、只改证据点、复验可回滚）、**判断边界**（生成物、历史记录、法律文本、有意的重复等不改）、**报告模式**（只审查不改文件，输出可直接转 issue/PR 的清单）。
+
 ## 快速开始
 
 在 DSH 中直接说：
@@ -40,7 +42,7 @@ md-doc-optimizer 是一个「文档瘦身 + 事实核对」的可复用 Agent �
 
 ### DSH
 
-把本目录放到用户技能目录下（与 code-refactor-prompts、serenity-skill 同级）：
+把本目录放到用户技能目录下（与 code-refactor-prompts 等同级）：
 
 ~~~text
 ~/.dsh/skills/md-doc-optimizer/
@@ -81,6 +83,7 @@ md-doc-optimizer/
 │   ├── sources.md                # 同领域项目/工具调研（含出处）
 │   ├── audit-checklist.md        # 逐目标检查清单
 │   ├── cjk-doc-rules.md          # 中文标点/空格/术语专项规则
+│   ├── reporting.md              # 报告字段、JSON 契约、PR/commit 模板
 │   ├── tool-configs.md           # markdownlint / Vale / lychee / cspell / CI 配置
 │   ├── drift-playbook.md         # 文档↔代码漂移核对
 │   └── prompting-templates.md    # 可复用提示词模板
