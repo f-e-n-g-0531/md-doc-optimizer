@@ -18,7 +18,7 @@
   - 运行 Markdown 里的代码块与控制台会话，核对输出是否仍然一致，提供 --fix 自动更新；语言无关、零依赖。
   - 映射：C、B
 - **markdown-doctest** — https://github.com/Widdershin/markdown-doctest
-  - 同类：跑 Markdown 代码块并核对输出（JS 生态）。
+  - 只执行 Markdown 里的 JS 代码块、验证不抛异常，**不比对输出**；输出一致性核对请用 mdoctest。
   - 映射：C
 - **Redocly respect** — https://redocly.com/docs/respect
   - 面向 OpenAPI 的「行为与安全回归测试」，确保文档与 API 描述、真实响应一致；对 API 文档的事实一致性尤其有用。
@@ -32,18 +32,18 @@
 - **mdite** — https://github.com/radleta/mdite
   - 把文档当作连通图：校验链接、检测孤儿文档、映射依赖，便于判断哪些内容可安全删除。
   - 映射：A、B
-- **docsync / doclint / gomarklint / rumdl / seiso**
+- **docsync / doclint / rumdl / seiso**
   - docsync：https://pkg.go.dev/github.com/ubgo/docsync
   - doclint：https://pkg.go.dev/github.com/openserbia/doclint
   - rumdl：https://pypi.org/project/rumdl/
   - seiso：https://crates.io/crates/seiso
-  - 各自提供 Markdown/文档质量检查的不同切片（链接、结构、可读性）。
+  - docsync 侧重把文档绑定到它描述的代码/配置/事实；doclint、rumdl、seiso 分别提供 Markdown 结构、lint/format、约定检查的不同切片。
   - 映射：A、B、C（视工具而定）
 
 ## 3. 结构 / 去重 lint（目标 A 的机械部分）
 
 - **markdownlint** — https://github.com/DavidAnson/markdownlint
-  - 规则 MD001–MD055。与去冗余直接相关：**MD024 重复标题**、**MD025 多个一级标题**、MD013 行长度、MD036 不要用强调代替标题、MD012 连续多个空行。
+  - 规则 MD001–MD060（markdownlint v0.41.1；部分编号已废弃，现含 MD056/MD058/MD059/MD060）。与去冗余直接相关：**MD024 重复标题**、**MD025 多个一级标题**、MD013 行长度、MD036 不要用强调代替标题、MD012 连续多个空行。
   - 配套 CLI：**markdownlint-cli2** — https://github.com/DavidAnson/markdownlint-cli2
 - **remark-lint** — https://github.com/remarkjs/remark-lint
   - unified 插件生态：no-duplicate-headings、no-duplicate-definitions、no-unused-definitions、no-dead-urls、no-empty-url 等，可组合成自定义规则集。
@@ -58,7 +58,7 @@
   - 抓陈词滥调、行话、冗余、very 滥用、weasel words，以及会「过时」的相对日期表述（valuable for B）。
 - **alex** — https://github.com/get-alex/alex
   - 抓无意识偏见/不得体/不包容的措辞。
-- **Harper** — https://writewithharper.com （自托管语法/可读性检查）
+- **Harper** — https://writewithharper.com （本地/开源语法与可读性检查）
 - **LanguageTool** — https://languagetool.org （语法/风格，开源引擎）
 - **textlint** — https://github.com/textlint/textlint （可插拔文本 lint，日/英/中文规则生态）
 

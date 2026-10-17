@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/f-e-n-g-0531/md-doc-optimizer/references/report.schema.json",
+  "title": "md-doc-optimizer audit report",
+  "description": "机器可读的文档审计报告格式；字段定义与示例见 references/reporting.md。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files_audited", "examined", "fixed", "needs_human", "no_action"],
+      "properties": {
+        "files_audited": { "type": "integer", "minimum": 0, "description": "审查的文件数" },
+        "examined": { "type": "integer", "minimum": 0, "description": "逐条核对的疑似问题数" },
+        "fixed": { "type": "integer", "minimum": 0, "description": "已修改的问题数" },
+        "needs_human": { "type": "integer", "minimum": 0, "description": "标记为 NEEDS_HUMAN 的问题数" },
+        "no_action": { "type": "integer", "minimum": 0, "description": "判定无需修改的问题数" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "问题清单；无问题时为空数组（NO_ISSUES）。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "line", "category", "severity", "action", "evidence"],
+        "properties": {
+          "file": { "type": "string", "minLength": 1, "description": "文件路径（相对仓库根）" },
+          "line": { "type": "integer", "minimum": 1, "description": "行号；整节删除用起始行" },
+          "category": {
+            "enum": ["A", "B", "C"],
+            "description": "A 去冗余 / B 删过期失效 / C 纠事实不符"
+          },
+          "severity": {
+            "enum": ["Critical", "High", "Medium", "Low"],
+            "description": "严重度，定义见 references/reporting.md 第 4 节"
+          },
+          "action": {
+            "enum": ["delete", "replace", "annotate", "keep"],
+            "description": "delete 删除；replace 改写；annotate 标注 NEEDS_HUMAN/DUBIOUS；keep 判定不改"
+          },
+          "excerpt": { "type": "string", "maxLength": 120, "description": "原文摘要（可选，不超过 120 字）" },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "description": "可复现证据：路径、命令与输出、git 提交号、链接状态或权威 URL；禁止「我觉得/可能」式表述"
+          },
+          "replacement": {
+            "type": ["string", "null"],
+            "description": "替换后文本；action 为 replace 时必填且非空，其余动作可为 null/省略"
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "action": { "const": "replace" } } },
+            "then": {
+              "required": ["replacement"],
+              "properties": { "replacement": { "type": "string", "minLength": 1 } }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

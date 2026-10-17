@@ -160,11 +160,13 @@ lychee --config ./lychee.toml --no-progress "**/*.md"
 ## doctest —— 复跑示例代码（事实核对）
 
 - mdoctest（语言无关）：`mdoctest README.md`（加 `--fix` 自动更新失效输出）
-- markdown-doctest（JS 生态）：`npx markdown-doctest README.md`
+- markdown-doctest（JS 生态）：只执行 JS 示例验证不抛异常，不比对输出：`npx markdown-doctest README.md`
 
 ## GitHub Actions —— 组合检查（自包含版）
 
-文件 `.github/workflows/docs-qa.yml`。markdownlint 与 lychee 是必过门禁；Vale 需先备好风格包，默认注释掉，按需启用。
+文件 `.github/workflows/docs-qa.yml`。markdownlint、链接检查、文档自洽检查与报告 Schema 校验是必过门禁；Vale 需先备好风格包，默认注释掉，按需启用。
+
+下面两步「docs consistency / validate report schema」依赖本仓库的 scripts/check-docs.mjs 与 references/report.schema.json；复制到其他仓库时按需删改，或换成自己的自洽检查。
 
 ~~~yaml
 name: docs-qa
@@ -172,9 +174,9 @@ name: docs-qa
 on:
   push:
     branches: [main]
-    paths: ["**.md", ".markdownlint.yml", "lychee.toml", ".github/workflows/docs-qa.yml"]
+    paths: ["**.md", ".markdownlint.yml", "lychee.toml", ".github/workflows/docs-qa.yml", "scripts/**", "**.json"]
   pull_request:
-    paths: ["**.md", ".markdownlint.yml", "lychee.toml", ".github/workflows/docs-qa.yml"]
+    paths: ["**.md", ".markdownlint.yml", "lychee.toml", ".github/workflows/docs-qa.yml", "scripts/**", "**.json"]
 
 permissions:
   contents: read
@@ -191,6 +193,14 @@ jobs:
 
       - name: markdownlint
         run: npx --yes markdownlint-cli2 "**/*.md"
+
+      # 仓库自洽检查：SKILL.md 版本 / 引用文件 / README 目录树（依赖 scripts/check-docs.mjs）
+      - name: docs consistency
+        run: node scripts/check-docs.mjs
+
+      # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/report.sample.json）
+      - name: validate report schema
+        run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json
 
       - name: check-links
         uses: lycheeverse/lychee-action@v2

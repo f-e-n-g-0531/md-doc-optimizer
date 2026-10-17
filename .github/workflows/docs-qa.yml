@@ -9,6 +9,8 @@ on:
       - ".markdownlint.yml"
       - "lychee.toml"
       - ".github/workflows/docs-qa.yml"
+      - "scripts/**"
+      - "**.json"
   pull_request:
     paths:
       - "**.md"
@@ -16,6 +18,8 @@ on:
       - ".markdownlint.yml"
       - "lychee.toml"
       - ".github/workflows/docs-qa.yml"
+      - "scripts/**"
+      - "**.json"
 
   workflow_call:
 
@@ -34,6 +38,12 @@ jobs:
 
       - name: markdownlint
         run: npx --yes markdownlint-cli2 "**/*.md"
+
+      - name: docs consistency
+        run: node scripts/check-docs.mjs
+
+      - name: validate report schema
+        run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json
 
       - name: check-links
         uses: lycheeverse/lychee-action@v2

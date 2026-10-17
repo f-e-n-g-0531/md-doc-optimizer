@@ -52,6 +52,16 @@
 - `evidence` 禁止「我觉得 / 可能 / 大概」式表述，必须是路径、命令、提交号或 URL。
 - 行号以审计时的文件内容为准；文件已被改动时重新定位后再输出。
 
+### 2.1 JSON Schema 与机器校验
+
+契约以 references/report.schema.json（JSON Schema 2020-12）为准，示例见 examples/report.sample.json。CI 会校验：
+
+~~~bash
+npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json
+~~~
+
+Schema 强制约束：`summary` 五个计数字段必填；每条 finding 的 `file`/`line`/`category`/`severity`/`action`/`evidence` 必填；`action` 为 `replace` 时 `replacement` 必须是非空字符串。
+
 ## 3. NEEDS_HUMAN 写法
 
 统一四段式，便于人工快速判断：

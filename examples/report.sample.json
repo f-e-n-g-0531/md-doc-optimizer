@@ -1,0 +1,41 @@
+{
+  "summary": {
+    "files_audited": 3,
+    "examined": 3,
+    "fixed": 2,
+    "needs_human": 1,
+    "no_action": 0
+  },
+  "findings": [
+    {
+      "file": "README.md",
+      "line": 42,
+      "category": "B",
+      "severity": "High",
+      "action": "delete",
+      "excerpt": "将于 2023 年上线插件系统",
+      "evidence": "全仓库无插件系统实现；git log --all -S '插件系统' 无对应提交",
+      "replacement": null
+    },
+    {
+      "file": "docs/api.md",
+      "line": 88,
+      "category": "C",
+      "severity": "High",
+      "action": "replace",
+      "excerpt": "`--output-dir` 默认 `./out`",
+      "evidence": "src/cli.ts:31 默认值为 ./build，参数名已改为 --out-dir",
+      "replacement": "使用 `--out-dir` 指定输出目录，默认输出到 `./build`。"
+    },
+    {
+      "file": "docs/install.md",
+      "line": 15,
+      "category": "B",
+      "severity": "Medium",
+      "action": "annotate",
+      "excerpt": "支持 Windows 7",
+      "evidence": "官方文档称 1.5.0 起仅支持 Windows 10+，需产品确认是否保留兼容说明",
+      "replacement": null
+    }
+  ]
+}

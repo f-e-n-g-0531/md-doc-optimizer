@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Markdown 文档优化器
@@ -79,15 +79,17 @@ metadata:
 
 信号：
 - 文档陈述与代码/配置/git 历史矛盾（参数名、默认值、返回结构、路径、版本号）。
-- 示例代码/输出与可运行结果不一致（可借助 mdoctest / markdown-doctest 复跑）。
+- 示例代码/输出与可运行结果不一致（mdoctest 复跑并核对输出；markdown-doctest 只验证 JS 示例不抛异常）。
 - 数字、时区、日期、拼写、术语、产品名、链接文本与链接目标不匹配。
 - 断言性结论缺乏依据或与权威来源冲突。
 
 处理：改成与证据一致；证据不足时标 DUBIOUS 并说明，不臆断。
 
-## 中文文档补充规则
+## 语言专项规则（中文 / 英文）
 
 英文工具（Vale / write-good / cspell）抓不到中文特有的标点、全半角、中英空格与译名问题。审计中文文档时额外套用 references/cjk-doc-rules.md：标点与空格、冗余套话、时间敏感表述、术语一致性、排版与链接细节。
+
+审计英文文档时套用 references/english-docs.md：英文冗余套话、相对时间表述、术语与大小写一致性、示例输出核对，以及 Vale / write-good / alex 的结果如何判断（只当候选清单，不盲改）。
 
 ## 工作流（5 阶段）
 
@@ -133,13 +135,13 @@ metadata:
 
 无问题时只返回：NO_ISSUES + 一句说明。
 
-需要被 CI 或脚本消费时，追加一个机器可读 JSON 块：
+需要被 CI 或脚本消费时，追加一个机器可读 JSON 块（与 references/report.schema.json 一致）：
 
 ~~~json
-{"files_audited": 0, "fixed": [], "needs_human": [], "no_action": []}
+{"summary": {"files_audited": 0, "examined": 0, "fixed": 0, "needs_human": 0, "no_action": 0}, "findings": []}
 ~~~
 
-字段定义、完整 JSON 契约与 PR/commit 模板见 references/reporting.md。
+字段定义、JSON Schema、校验命令与 PR/commit 模板见 references/reporting.md。
 
 ## 报告模式（只报告不改）
 
@@ -179,7 +181,9 @@ metadata:
 ## 深入阅读
 - references/audit-checklist.md —— 逐目标打勾清单
 - references/cjk-doc-rules.md —— 中文标点/空格/术语专项规则
+- references/english-docs.md —— 英文文档专项规则（含 Vale/write-good 结果判断）
 - references/reporting.md —— 报告字段、JSON 契约、PR/commit 模板
+- references/report.schema.json —— 报告 JSON Schema（CI 校验用）
 - references/sources.md —— 同领域项目/工具与出处
 - references/tool-configs.md —— 现成工具配置
 - references/drift-playbook.md —— 文档 vs 代码漂移核对

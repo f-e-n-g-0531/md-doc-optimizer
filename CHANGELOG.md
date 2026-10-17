@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0 (2026-10-18)
+
+- 新增 references/english-docs.md：英文文档专项规则（冗余套话、相对时间表述、事实核对、术语一致性、Vale/write-good/alex 结果判断、审计清单与前后对照示例）。
+- 修复 SKILL.md 与 references/reporting.md 的 JSON 报告契约不一致：SKILL.md 的机器可读示例改为与 references/report.schema.json 一致的 summary + findings 结构。
+- 新增 references/report.schema.json（JSON Schema 2020-12）与 examples/report.sample.json；CI 用 ajv-cli 校验报告格式。
+- 新增 scripts/check-docs.mjs 与对应 CI 步骤：校验 SKILL.md 版本与 CHANGELOG 最新版本一致、文档引用的文件存在、README 目录树与实际文件同步。
+- 修复 release 工作流手动触发的版本解析缺陷：workflow_dispatch 且未填版本时回退到最新 tag（原先会把分支名当版本号），并校验版本号形如 v*。
+- 依据外部事实核验（docproof / mdoctest / pangu / cspell / lychee / lint-md / markdownlint / 33 个仓库与 47 个链接）修正 4 处描述：markdown-doctest 不比对输出、markdownlint 规则编号更新到 MD060、Harper 定位、docsync 定位。
+- README 新增「质量门禁」章节并更新目录结构；docs-qa 工作流的路径过滤覆盖 scripts/ 与 JSON 变更。
+
 ## 1.3.0 (2026-10-18)
 
 - 新增「判断边界：什么不该改」章节：生成物、有意的重复、历史记录、法律文本、演示性错误、权威来源、计划内容、无法复核的断言。

@@ -24,6 +24,8 @@ md-doc-optimizer 是一个「文档瘦身 + 事实核对」的可复用 Agent �
 
 另内置三条保护：**安全与幂等**（改动前留底、只改证据点、复验可回滚）、**判断边界**（生成物、历史记录、法律文本、有意的重复等不改）、**报告模式**（只审查不改文件，输出可直接转 issue/PR 的清单）。
 
+语言专项规则分两份：中文文档套用 [references/cjk-doc-rules.md](./references/cjk-doc-rules.md)，英文文档套用 [references/english-docs.md](./references/english-docs.md)。机器可读报告有 [JSON Schema](./references/report.schema.json)，可在 CI 里直接校验。
+
 ## 快速开始
 
 在 DSH 中直接说：
@@ -79,17 +81,40 @@ md-doc-optimizer/
 ├── SKILL.md                      # 主体：三大目标 + 证据优先 5 阶段工作流
 ├── README.md
 ├── LICENSE / CHANGELOG.md
+├── .markdownlint.yml             # markdownlint 配置（CI 门禁）
+├── lychee.toml                   # lychee 链接检查配置（CI 门禁）
+├── .github/workflows/
+│   ├── docs-qa.yml               # CI：markdownlint + 链接 + 自洽检查 + Schema 校验
+│   └── release.yml               # 推送 v* 标签或手动触发时发布 Release
+├── scripts/
+│   └── check-docs.mjs            # 版本号 / 引用 / README 目录树自洽检查
 ├── references/
 │   ├── sources.md                # 同领域项目/工具调研（含出处）
 │   ├── audit-checklist.md        # 逐目标检查清单
 │   ├── cjk-doc-rules.md          # 中文标点/空格/术语专项规则
+│   ├── english-docs.md           # 英文文档专项规则（含 Vale/write-good 判断）
 │   ├── reporting.md              # 报告字段、JSON 契约、PR/commit 模板
+│   ├── report.schema.json        # 报告 JSON Schema（CI 校验）
 │   ├── tool-configs.md           # markdownlint / Vale / lychee / cspell / CI 配置
 │   ├── drift-playbook.md         # 文档↔代码漂移核对
 │   └── prompting-templates.md    # 可复用提示词模板
 └── examples/
-    └── before-after.md           # 去/删/改三段式示例
+    ├── before-after.md           # 去/删/改三段式示例
+    └── report.sample.json        # 机器可读报告示例（Schema 校验用）
 ~~~
+
+## 质量门禁（本仓库 CI）
+
+[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 每次推送 / PR 自动跑四道检查：
+
+| 检查 | 命令 | 作用 |
+| --- | --- | --- |
+| 结构 lint | `npx markdownlint-cli2 "**/*.md"` | 标题层级、围栏、表格等结构问题 |
+| 链接检查 | `lychee --config ./lychee.toml --no-progress "**/*.md"` | 失效链接 |
+| 自洽检查 | `node scripts/check-docs.mjs` | SKILL.md 版本 == CHANGELOG 最新版本；引用的文件都存在；README 目录树与实际文件同步 |
+| 报告契约 | `npx ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d examples/report.sample.json` | 机器可读报告符合 JSON Schema |
+
+推送 `v*` 标签（或手动触发 release 工作流）会先过同一套检查，再发布 GitHub Release。
 
 ## 工具生态
 
