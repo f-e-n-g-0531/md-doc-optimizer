@@ -50,7 +50,7 @@
 
 ## 4. 文风 / 冗余 / 得体（目标 A 的语义部分）
 
-- **Vale** — https://vale.sh （仓库 https://github.com/errata-ai/vale）
+- **Vale** — https://vale.sh ；仓库 https://github.com/errata-ai/vale
   - 可配置的 prose linter，内置风格包：Microsoft、Google、Readability，以及下述 write-good、proselint、alex 的封装。
 - **write-good** — https://github.com/btford/write-good
   - 抓英文口水词/冗余：weasel words（many、various、very）、被动语态、多余副词、以 so / there is 开头等。
