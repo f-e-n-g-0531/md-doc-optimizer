@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 (2026-10-18)
+
+- 新增 GitHub Actions CI：markdownlint + lychee 自动检查（.github/workflows/docs-qa.yml）。
+- 新增 CI 徽章与 .markdownlint.yml / lychee.toml 配置。
+- 新增发布工作流（.github/workflows/release.yml）：推送 v* 标签或手动触发即可发布正式版本。
+- 修复 references/sources.md 中 Vale 仓库链接被全角括号粘连导致的 404。
+
 ## 1.0.0 (2026-10-18)
 
 - 首次发布：md-doc-optimizer Skill。

@@ -17,6 +17,8 @@ on:
       - "lychee.toml"
       - ".github/workflows/docs-qa.yml"
 
+  workflow_call:
+
 permissions:
   contents: read
 

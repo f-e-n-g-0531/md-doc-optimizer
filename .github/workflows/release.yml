@@ -1,0 +1,51 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，例如 v1.1.0（留空则使用刚推送的 tag）'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  # 发布前先跑 lint + 链接检查，作为质量门禁
+  qa:
+    uses: ./.github/workflows/docs-qa.yml
+
+  release:
+    needs: qa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          V="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            V="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag exists
+        run: |
+          V="${{ steps.version.outputs.version }}"
+          if ! git rev-parse -q --verify "refs/tags/$V" >/dev/null 2>&1; then
+            git tag -a "$V" -m "$V"
+            git push origin "$V"
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: md-doc-optimizer ${{ steps.version.outputs.version }}
+          generate_release_notes: true
