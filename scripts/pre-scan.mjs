@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // md-doc-optimizer 预扫描（pre-scan）：只读扫描目标目录下的 Markdown，输出确定性候选清单。
 // 用法：node scripts/pre-scan.mjs [target-dir] [--text] [--fail-on kind1,kind2] [--include-fixtures]
+//                              [--baseline file] [--write-baseline file]
 // 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法错误
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, dirname, parse } from 'node:path';
 
 const TOOL = 'md-doc-optimizer-pre-scan';
 const SCHEMA_VERSION = 1;
+const BASELINE_TOOL = 'md-doc-optimizer-pre-scan-baseline';
+const BASELINE_SCHEMA_VERSION = 1;
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'vendor', '.venv', 'venv']);
 const FIXTURE_SEGMENTS = new Set(['test', 'tests', 'fixtures', '__fixtures__', '__snapshots__']);
 const MD_EXT = /\.(?:md|markdown)$/i;
@@ -594,32 +597,111 @@ function compareCandidates(a, b) {
   return 0;
 }
 
-// --fail-on 命中时把匹配项写到 stderr 并返回 1；stdout 的 JSON/文本输出保持不变。
-// 默认跳过 fixture 上下文（测试夹具里的坏链接是内容本身），--include-fixtures 可显式包含。
-function evaluateGate(result, failOn, includeFixtures) {
+// 基线条目只记 file + kind + evidence；比较时把 evidence 里的行号引用（如 "line 3"）归一，
+// 行号漂移不会误伤；文档大改导致证据文本本身变化时仍需刷新 baseline。
+function baselineEvidence(evidence) {
+  return String(evidence).replace(
+    /((?:repeat of heading|repeat of paragraph|first H1|already defined) at )line \d+/g,
+    '$1line #');
+}
+function candidateKey(candidate) {
+  return [candidate.file, candidate.kind, baselineEvidence(candidate.evidence)].join('\u0000');
+}
+function baselineEntryKey(entry) {
+  return [entry.file, entry.kind, baselineEvidence(entry.evidence)].join('\u0000');
+}
+
+// 读取并校验 baseline 文件，返回已记录候选的 key 集合
+function readBaseline(file) {
+  const absPath = resolve(file);
+  let raw;
+  try {
+    raw = readFileSync(absPath, 'utf8');
+  } catch (err) {
+    usageError('cannot read baseline file: ' + absPath + ' (' + err.message + ')');
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    usageError('invalid baseline JSON: ' + absPath + ' (' + err.message + ')');
+  }
+  if (!data || data.tool !== BASELINE_TOOL) {
+    usageError('baseline file has unexpected tool (expected "' + BASELINE_TOOL + '"): ' + absPath);
+  }
+  if (data.schema_version !== BASELINE_SCHEMA_VERSION) {
+    usageError('unsupported baseline schema_version: ' + data.schema_version);
+  }
+  if (!Array.isArray(data.entries)) usageError('baseline file is missing entries array: ' + absPath);
+  const keys = new Set();
+  for (const entry of data.entries) {
+    if (!entry || typeof entry.file !== 'string' || entry.file.trim() === '' ||
+      typeof entry.kind !== 'string' || typeof entry.evidence !== 'string' || entry.evidence.trim() === '') {
+      usageError('baseline entry must contain non-empty string file/kind/evidence: ' + absPath);
+    }
+    if (!Object.prototype.hasOwnProperty.call(CATEGORY, entry.kind)) {
+      usageError('baseline entry has unknown kind: ' + entry.kind);
+    }
+    if (entry.file.startsWith('/') || /^[A-Za-z]:[\\/]/.test(entry.file) || entry.file.includes('\\')) {
+      usageError('baseline entry file must be a repository-relative POSIX path: ' + entry.file);
+    }
+    keys.add(baselineEntryKey(entry));
+  }
+  return keys;
+}
+
+// 把当前候选写成 baseline（按 file/kind/evidence 排序，输出稳定可 diff）
+function writeBaseline(file, result) {
+  const absPath = resolve(file);
+  const entries = result.candidates
+    .map((candidate) => ({ file: candidate.file, kind: candidate.kind, evidence: candidate.evidence }))
+    .sort((a, b) => {
+      if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+      if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
+      if (a.evidence !== b.evidence) return a.evidence < b.evidence ? -1 : 1;
+      return 0;
+    });
+  const payload = {
+    tool: BASELINE_TOOL,
+    schema_version: BASELINE_SCHEMA_VERSION,
+    entries: entries,
+  };
+  try {
+    mkdirSync(dirname(absPath), { recursive: true });
+    writeFileSync(absPath, JSON.stringify(payload, null, 2) + '\n');
+  } catch (err) {
+    usageError('cannot write baseline file: ' + absPath + ' (' + err.message + ')');
+  }
+  return entries.length;
+}
+
+// --fail-on 命中时把新增（未被 baseline 记录）的匹配项写到 stderr 并返回 1；
+// stdout 的 JSON/文本输出保持不变。默认跳过 fixture 上下文（测试夹具里的坏链接是内容本身）。
+function evaluateGate(result, failOn, includeFixtures, baselineKeys) {
   if (failOn.size === 0) return 0;
   const matched = result.candidates.filter((candidate) => failOn.has(candidate.kind));
   const relevant = includeFixtures ? matched : matched.filter((candidate) => candidate.context !== 'fixture');
   const skipped = matched.length - relevant.length;
-  const skippedNote = skipped > 0
-    ? '; ' + skipped + ' fixture candidate(s) skipped (use --include-fixtures)'
-    : '';
-  if (relevant.length === 0) {
-    if (skipped > 0) {
-      process.stderr.write('pre-scan: 0 candidate(s) matched --fail-on' + skippedNote + '\n');
-    }
+  const baselined = baselineKeys ? relevant.filter((candidate) => baselineKeys.has(candidateKey(candidate))) : [];
+  const fresh = baselineKeys ? relevant.filter((candidate) => !baselineKeys.has(candidateKey(candidate))) : relevant;
+  const notes = [];
+  if (baselined.length > 0) notes.push(baselined.length + ' baselined candidate(s) ignored');
+  if (skipped > 0) notes.push(skipped + ' fixture candidate(s) skipped (use --include-fixtures)');
+  const noteText = notes.length > 0 ? '; ' + notes.join('; ') : '';
+  if (fresh.length === 0) {
+    if (noteText) process.stderr.write('pre-scan: 0 new candidate(s) matched --fail-on' + noteText + '\n');
     return 0;
   }
-  process.stderr.write('pre-scan: ' + relevant.length + ' candidate(s) matched --fail-on (' +
-    Array.from(failOn).join(', ') + ')' + skippedNote + '\n');
+  process.stderr.write('pre-scan: ' + fresh.length + ' new candidate(s) matched --fail-on (' +
+    Array.from(failOn).join(', ') + ')' + noteText + '\n');
   const limit = 20;
-  for (const candidate of relevant.slice(0, limit)) {
+  for (const candidate of fresh.slice(0, limit)) {
     process.stderr.write('  ' + candidate.file + ':' + candidate.line + ' [' + candidate.category + '] ' +
       candidate.kind + (candidate.context === 'fixture' ? ' [fixture]' : '') +
       ' -- ' + candidate.evidence + '\n');
   }
-  if (relevant.length > limit) {
-    process.stderr.write('  ... and ' + (relevant.length - limit) + ' more (full list is in the JSON output)\n');
+  if (fresh.length > limit) {
+    process.stderr.write('  ... and ' + (fresh.length - limit) + ' more (full list is in the JSON output)\n');
   }
   return 1;
 }
@@ -652,6 +734,8 @@ function main() {
   const args = process.argv.slice(2);
   let textMode = false;
   let includeFixtures = false;
+  let baselinePath = null;
+  let writeBaselinePath = null;
   const failOn = new Set();
   const positional = [];
   for (let i = 0; i < args.length; i++) {
@@ -687,11 +771,42 @@ function main() {
       }
       continue;
     }
+    if (arg === '--baseline' || arg.startsWith('--baseline=')) {
+      let value;
+      if (arg === '--baseline') {
+        value = args[++i];
+        if (value === undefined) usageError('--baseline requires a file path');
+      } else {
+        value = arg.slice('--baseline='.length);
+      }
+      if (!value || value.startsWith('-')) usageError('--baseline requires a file path');
+      baselinePath = value;
+      continue;
+    }
+    if (arg === '--write-baseline' || arg.startsWith('--write-baseline=')) {
+      let value;
+      if (arg === '--write-baseline') {
+        value = args[++i];
+        if (value === undefined) usageError('--write-baseline requires a file path');
+      } else {
+        value = arg.slice('--write-baseline='.length);
+      }
+      if (!value || value.startsWith('-')) usageError('--write-baseline requires a file path');
+      writeBaselinePath = value;
+      continue;
+    }
     if (arg.startsWith('-') && arg !== '-') usageError('unknown option: ' + arg);
     positional.push(arg);
   }
   if (positional.length > 1) {
     usageError('expected at most one target directory (multiple kinds need --fail-on kind1,kind2)');
+  }
+  if (writeBaselinePath !== null) {
+    if (failOn.size > 0) usageError('--write-baseline cannot be combined with --fail-on');
+    if (baselinePath !== null) usageError('--write-baseline cannot be combined with --baseline');
+  }
+  if (baselinePath !== null && failOn.size === 0) {
+    usageError('--baseline requires --fail-on');
   }
   const targetArg = positional.length === 1 ? positional[0] : process.cwd();
   let targetStat = null;
@@ -704,6 +819,7 @@ function main() {
     usageError('target is not a directory: ' + targetArg);
   }
   const targetAbs = resolve(targetArg);
+  const baselineKeys = baselinePath !== null ? readBaseline(baselinePath) : null;
 
   const docs = [];
   for (const absPath of collectFiles(targetAbs)) {
@@ -759,12 +875,24 @@ function main() {
     summary: { total: sorted.length, by_kind: byKindSorted, by_category: byCategory },
   };
 
-  if (textMode) {
-    process.stdout.write(renderText(result));
+  if (writeBaselinePath !== null) {
+    const count = writeBaseline(writeBaselinePath, result);
+    if (textMode) {
+      process.stdout.write(renderText(result));
+    } else {
+      process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    }
+    process.stderr.write('pre-scan: wrote ' + count + ' candidate(s) to baseline ' +
+      toPosix(resolve(writeBaselinePath)) + '\n');
+    process.exitCode = 0;
   } else {
-    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    if (textMode) {
+      process.stdout.write(renderText(result));
+    } else {
+      process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    }
+    process.exitCode = evaluateGate(result, failOn, includeFixtures, baselineKeys);
   }
-  process.exitCode = evaluateGate(result, failOn, includeFixtures);
 }
 
 main();

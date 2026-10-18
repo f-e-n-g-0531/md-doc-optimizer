@@ -164,17 +164,25 @@ lychee --config ./lychee.toml --no-progress "**/*.md"
 
 ## 内置预扫脚本（scripts/pre-scan.mjs）
 
-零依赖、只读的候选生成器，用于 P2：不访问网络、不修改目标仓库，输出确定性的 JSON 候选清单。候选必须再按 SKILL.md 的 P3 逐条核对，不能直接当结论。
+零依赖的候选生成器，用于 P2：默认只读（不访问网络、不修改目标仓库），输出确定性的 JSON 候选清单；仅显式传 `--write-baseline <file>` 时才写入用户指定的基线文件。候选必须再按 SKILL.md 的 P3 逐条核对，不能直接当结论。
 
 ~~~bash
 node scripts/pre-scan.mjs <目标目录>          # 输出 JSON 候选清单
 node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link,broken-anchor  # 命中即失败
+node scripts/pre-scan.mjs <目标目录> --write-baseline .pre-scan-baseline.json    # 记录当前候选为基线
+node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline .pre-scan-baseline.json  # 只拦新增
 ~~~
 
 `--text` 每行按 `file:line [类别] kind -- evidence | 原文` 输出：`evidence` 是命中的具体词或路径（例如同一行里的「目前」「最近」会分别列出），便于逐条 triage。
 
 `--fail-on <kind,...>` 是 CI 门禁：命中指定 kind 时退出码为 1，匹配项写到 stderr（最多 20 条明细，其余以 `... and N more` 提示，完整列表看 stdout JSON）；stdout 仍输出完整 JSON/文本，便于同时存档。**默认跳过 `context=fixture` 的候选**（测试夹具里的坏链接是内容本身），需要时加 `--include-fixtures`。kind 用逗号分隔、不能有空项；未知 kind 或空项按用法错误退出 2。退出码：**0 成功、1 门禁命中、2 用法错误**。仅跳过 fixture 时也会在 stderr 写一行跳过计数（退出码仍是 0）；门禁明细里的 fixture 候选会标 `[fixture]`。
+
+存量仓库可用 baseline 做「只拦新增」的棘轮（ratchet）：
+
+- `--write-baseline <file>`：把当前候选写成基线，字段为 `{tool, schema_version, entries:[{file, kind, evidence}]}`，按 file/kind/evidence 排序，输出稳定可 diff；不能与 `--fail-on`/`--baseline` 同用，退出码 0。
+- `--baseline <file>`：配合 `--fail-on` 使用，只对基线之外的新候选失败；stderr 会说明忽略了多少条基线候选。基线键为 `file + kind + evidence`；比较时只归一已知行号型 evidence（`repeat of heading/paragraph at line N`、`first H1 at line N`、`already defined at line N`），路径里的字面 `line 12` 不会误伤。文档大改后若证据文本本身变化导致旧条目失配，重新生成 baseline 并 review diff。
+- 基线文件缺失、坏 JSON、tool/schema_version 不符，或条目缺字段/未知 kind/空证据/非 POSIX 相对路径（绝对路径、反斜杠路径），都按用法错误退出 2。
 
 输出契约见 references/pre-scan.schema.json（JSON Schema 2020-12）；CI 会用真实输出做校验。新增或改名 kind 时必须同步 schema，`scripts/check-docs.mjs` 会比对脚本 CATEGORY、schema 枚举与类别映射。
 

@@ -2,7 +2,7 @@
 // scripts/pre-scan.test.mjs — pre-scan 自测：构造临时夹具，校验输出契约、各类检测与确定性。
 // 运行：node scripts/pre-scan.test.mjs（成功退出 0，失败退出 1）
 import assert from 'node:assert';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, sep } from 'node:path';
@@ -579,6 +579,139 @@ function runAssertions(tmp) {
   ok(gateFixtureInclude.stderr.includes('test/fixtures/bad.md:3'),
     'included fixture candidate is listed');
   ok(gateFixtureInclude.stderr.includes('[fixture]'), 'fixture candidates are marked in gate details');
+
+  // ---- baseline 棘轮（存量为基线，只拦新增）----
+  const baselineDir = join(tmp, 'baseline-work');
+  mkdirSync(baselineDir, { recursive: true });
+  writeFileSync(join(baselineDir, 'bad1.md'), '# Bad1\n\n[one](./nope1.md)\n');
+  const baselinePath = join(tmp, 'baseline.json');
+  const writeBaselineRun = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--write-baseline', baselinePath], { encoding: 'utf8' });
+  eq(writeBaselineRun.status, 0, '--write-baseline exits 0');
+  ok(writeBaselineRun.stderr.includes('wrote 1 candidate(s) to baseline'), 'baseline write summary');
+  const baselineData = JSON.parse(readFileSync(baselinePath, 'utf8'));
+  eq(baselineData.tool, 'md-doc-optimizer-pre-scan-baseline', 'baseline tool field');
+  eq(baselineData.schema_version, 1, 'baseline schema_version');
+  eq(baselineData.entries, [{ file: 'bad1.md', kind: 'broken-local-link', evidence: 'relative link target not found: ./nope1.md' }],
+    'baseline entries only store file/kind/evidence');
+  const baselinePathCopy = join(tmp, 'baseline-copy.json');
+  spawnSync(process.execPath, [scriptPath, baselineDir, '--write-baseline', baselinePathCopy], { encoding: 'utf8' });
+  eq(readFileSync(baselinePathCopy, 'utf8'), readFileSync(baselinePath, 'utf8'), 'baseline output is deterministic');
+
+  writeFileSync(join(baselineDir, 'bad2.md'), '# Bad2\n\n[two](./nope2.md)\n');
+  const baselineGate = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', baselinePath], { encoding: 'utf8' });
+  eq(baselineGate.status, 1, 'baseline gate fails on new candidates only');
+  ok(baselineGate.stderr.includes('1 new candidate(s) matched'), 'baseline gate counts only new candidates');
+  ok(baselineGate.stderr.includes('1 baselined candidate(s) ignored'), 'baseline gate explains ignored baseline');
+  ok(baselineGate.stderr.includes('bad2.md:3'), 'new candidate is listed');
+  ok(!baselineGate.stderr.includes('bad1.md'), 'baselined candidate is not listed in details');
+
+  const allBaselinedDir = join(tmp, 'baseline-all');
+  mkdirSync(allBaselinedDir, { recursive: true });
+  writeFileSync(join(allBaselinedDir, 'bad.md'), '# Bad\n\n[bad](./nope.md)\n');
+  const allBaselinePath = join(tmp, 'baseline-all.json');
+  spawnSync(process.execPath, [scriptPath, allBaselinedDir, '--write-baseline', allBaselinePath], { encoding: 'utf8' });
+  const allBaselined = spawnSync(process.execPath,
+    [scriptPath, allBaselinedDir, '--fail-on', 'broken-local-link', '--baseline', allBaselinePath], { encoding: 'utf8' });
+  eq(allBaselined.status, 0, 'fully baselined repo passes the gate');
+  ok(allBaselined.stderr.includes('1 baselined candidate(s) ignored'), 'fully baselined run explains ignored baseline');
+
+  // evidence 里的 line N 归一：插入行导致行号漂移后仍匹配基线
+  const shiftDir = join(tmp, 'baseline-shift');
+  mkdirSync(shiftDir, { recursive: true });
+  writeFileSync(join(shiftDir, 'dup.md'), '# Dup\n\n## Notes\n\nfirst\n\n## Notes\n\nsecond\n');
+  const shiftBaselinePath = join(tmp, 'baseline-shift.json');
+  spawnSync(process.execPath, [scriptPath, shiftDir, '--write-baseline', shiftBaselinePath], { encoding: 'utf8' });
+  writeFileSync(join(shiftDir, 'dup.md'), '# Dup\n\nintro\n\nmore\n\n## Notes\n\nfirst\n\n## Notes\n\nsecond\n');
+  const shiftGate = spawnSync(process.execPath,
+    [scriptPath, shiftDir, '--fail-on', 'duplicate-heading', '--baseline', shiftBaselinePath], { encoding: 'utf8' });
+  eq(shiftGate.status, 0, 'baseline ignores line-number shifts in evidence');
+  ok(shiftGate.stderr.includes('1 baselined candidate(s) ignored'), 'line-shift baseline match is explained');
+
+  // 只归一已知行号型 evidence：路径里字面 "line 12" 不能被归一
+  const normDir = join(tmp, 'baseline-normalize');
+  mkdirSync(normDir, { recursive: true });
+  writeFileSync(join(normDir, 'ref.md'), '# Ref\n\n[ref]: <./line 12.md>\n');
+  const normBaselinePath = join(tmp, 'baseline-normalize.json');
+  spawnSync(process.execPath, [scriptPath, normDir, '--write-baseline', normBaselinePath], { encoding: 'utf8' });
+  writeFileSync(join(normDir, 'ref.md'), '# Ref\n\n[ref]: <./line 34.md>\n');
+  const normGate = spawnSync(process.execPath,
+    [scriptPath, normDir, '--fail-on', 'broken-local-link', '--baseline', normBaselinePath], { encoding: 'utf8' });
+  eq(normGate.status, 1, 'baseline normalization only applies to line-number evidence, not paths');
+  ok(normGate.stderr.includes('1 new candidate(s) matched'), 'changed path is treated as a new candidate');
+
+  const writeFailure = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--write-baseline', tmp], { encoding: 'utf8' });
+  eq(writeFailure.status, 2, 'writing baseline to a directory exits 2');
+  eq(writeFailure.stdout, '', 'baseline write failure produces no stdout contract JSON');
+  ok(writeFailure.stderr.includes('cannot write baseline file'), 'write failure message');
+
+  const baselineMissing = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'missing.json')], { encoding: 'utf8' });
+  eq(baselineMissing.status, 2, 'missing baseline file exits 2');
+  ok(baselineMissing.stderr.includes('cannot read baseline file'), 'missing baseline error message');
+
+  writeFileSync(join(tmp, 'bad-baseline.json'), 'not json');
+  const baselineBadJson = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'bad-baseline.json')], { encoding: 'utf8' });
+  eq(baselineBadJson.status, 2, 'invalid baseline JSON exits 2');
+  ok(baselineBadJson.stderr.includes('invalid baseline JSON'), 'invalid baseline JSON message');
+
+  writeFileSync(join(tmp, 'wrong-tool-baseline.json'),
+    JSON.stringify({ tool: 'something-else', schema_version: 1, entries: [] }));
+  const baselineWrongTool = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'wrong-tool-baseline.json')], { encoding: 'utf8' });
+  eq(baselineWrongTool.status, 2, 'baseline with unexpected tool exits 2');
+  ok(baselineWrongTool.stderr.includes('unexpected tool'), 'unexpected tool message');
+
+  writeFileSync(join(tmp, 'bad-entry-baseline.json'),
+    JSON.stringify({ tool: 'md-doc-optimizer-pre-scan-baseline', schema_version: 1, entries: [{ file: 1 }] }));
+  const baselineBadEntry = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'bad-entry-baseline.json')], { encoding: 'utf8' });
+  eq(baselineBadEntry.status, 2, 'malformed baseline entry exits 2');
+  ok(baselineBadEntry.stderr.includes('must contain non-empty string file/kind/evidence'), 'malformed entry message');
+
+  const entryOf = (entry) => JSON.stringify({ tool: 'md-doc-optimizer-pre-scan-baseline', schema_version: 1, entries: [entry] });
+  writeFileSync(join(tmp, 'unknown-kind-baseline.json'),
+    entryOf({ file: 'a.md', kind: 'no-such-kind', evidence: 'x' }));
+  const baselineUnknownKind = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'unknown-kind-baseline.json')], { encoding: 'utf8' });
+  eq(baselineUnknownKind.status, 2, 'baseline entry with unknown kind exits 2');
+  ok(baselineUnknownKind.stderr.includes('unknown kind: no-such-kind'), 'unknown kind message');
+
+  writeFileSync(join(tmp, 'empty-evidence-baseline.json'),
+    entryOf({ file: 'a.md', kind: 'broken-local-link', evidence: '  ' }));
+  const baselineEmptyEvidence = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'empty-evidence-baseline.json')], { encoding: 'utf8' });
+  eq(baselineEmptyEvidence.status, 2, 'baseline entry with empty evidence exits 2');
+
+  writeFileSync(join(tmp, 'absolute-file-baseline.json'),
+    entryOf({ file: '/abs/a.md', kind: 'broken-local-link', evidence: 'x' }));
+  const baselineAbsoluteFile = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'absolute-file-baseline.json')], { encoding: 'utf8' });
+  eq(baselineAbsoluteFile.status, 2, 'baseline entry with absolute path exits 2');
+  ok(baselineAbsoluteFile.stderr.includes('repository-relative POSIX path'), 'absolute path message');
+
+  const writeBaselineWithGate = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--write-baseline', join(tmp, 'x.json'), '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
+  eq(writeBaselineWithGate.status, 2, '--write-baseline with --fail-on exits 2');
+  ok(writeBaselineWithGate.stderr.includes('cannot be combined with --fail-on'), 'write/gate combination message');
+
+  const writeBaselineWithBaseline = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--write-baseline', join(tmp, 'x.json'), '--baseline', baselinePath], { encoding: 'utf8' });
+  eq(writeBaselineWithBaseline.status, 2, '--write-baseline with --baseline exits 2');
+  ok(writeBaselineWithBaseline.stderr.includes('cannot be combined with --baseline'), 'write/baseline combination message');
+
+  const baselineWithoutGate = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--baseline', baselinePath], { encoding: 'utf8' });
+  eq(baselineWithoutGate.status, 2, '--baseline without --fail-on exits 2');
+  ok(baselineWithoutGate.stderr.includes('--baseline requires --fail-on'), 'baseline requires gate message');
+
+  const writeBaselineMissingValue = spawnSync(process.execPath,
+    [scriptPath, baselineDir, '--write-baseline'], { encoding: 'utf8' });
+  eq(writeBaselineMissingValue.status, 2, '--write-baseline without a path exits 2');
+  ok(writeBaselineMissingValue.stderr.includes('requires a file path'), 'missing baseline path message');
 }
 
 function main() {

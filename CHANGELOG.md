@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.0 (2026-10-18)
+
+- 预扫新增 baseline 棘轮：`--write-baseline <file>` 把当前候选写成基线（tool/schema_version/entries，按 file/kind/evidence 排序、输出确定）；`--baseline <file>` 配合 `--fail-on` 只对新候选失败，已在基线中的候选在 stderr 说明忽略数量。
+- 基线键为 file + kind + evidence；比较时只归一已知行号型 evidence（`repeat of heading/paragraph at line N`、`first H1 at line N`、`already defined at line N`），路径里的字面 `line 12` 不会误伤；`--write-baseline` 与 `--fail-on`/`--baseline` 互斥，`--baseline` 必须与 `--fail-on` 同用；基线文件缺失/坏 JSON/tool 不符/条目缺字段/未知 kind/空证据/绝对路径均按用法错误退出 2，写基线失败时不输出 stdout 契约 JSON。
+- 自测断言从 744 增至 785，覆盖 baseline 写入格式与确定性、只拦新增、全量基线通过、行号漂移归一（含路径字面 line N 不误伤）、写入失败输出约定、非法基线与参数互斥。
+- 同步更新 references/tool-configs.md（baseline 用法/格式/棘轮流程）、README、SKILL.md 工具表；版本号升至 1.10.0。
+
 ## 1.9.0 (2026-10-18)
 
 - 预扫新增 `--fail-on <kind,...>` CI 门禁：命中指定候选类型时退出码 1，匹配项写到 stderr（最多 20 条明细，其余 `... and N more`，完整列表看 stdout JSON），stdout 仍输出完整 JSON/文本；默认跳过 `context=fixture` 候选（stderr 说明跳过数，退出码仍为 0；明细中的夹具候选标 `[fixture]`），`--include-fixtures` 可显式包含；kind 逗号分隔且不允许空项，未知 kind/空项按用法错误退出 2（退出码约定 0/1/2）。
