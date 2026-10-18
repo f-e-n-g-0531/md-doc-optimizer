@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/f-e-n-g-0531/md-doc-optimizer/references/pre-scan.schema.json",
+  "title": "md-doc-optimizer pre-scan output",
+  "description": "scripts/pre-scan.mjs 的 JSON 输出契约（schema_version=1）。CI 用它校验真实输出，避免脚本与消费者契约漂移。kind 枚举只在 $defs.kind 定义一次。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "schema_version",
+    "target",
+    "files_scanned",
+    "candidates",
+    "summary"
+  ],
+  "properties": {
+    "tool": {
+      "const": "md-doc-optimizer-pre-scan"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files_scanned": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "by_kind",
+        "by_category"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_kind": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/kind"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_category": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "A",
+            "B",
+            "C"
+          ],
+          "properties": {
+            "A": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "B": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "C": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "kind": {
+      "type": "string",
+      "description": "候选类型；新增/改名时必须同步 scripts/pre-scan.mjs 的 CATEGORY",
+      "enum": [
+        "broken-anchor",
+        "broken-local-image",
+        "broken-local-link",
+        "case-mismatch-link",
+        "default-branch-master-link",
+        "duplicate-heading",
+        "duplicate-paragraph",
+        "duplicate-reference-definition",
+        "empty-link-target",
+        "multiple-h1",
+        "near-duplicate-files",
+        "placeholder-marker",
+        "stale-time-phrase",
+        "trailing-fullwidth-after-url",
+        "undefined-reference-label",
+        "unused-reference-definition"
+      ]
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "line",
+        "kind",
+        "category",
+        "excerpt",
+        "evidence",
+        "context"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "category": {
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "enum": [
+            "docs",
+            "fixture"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "broken-anchor"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "broken-local-image"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "broken-local-link"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "case-mismatch-link"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "default-branch-master-link"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "duplicate-heading"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "duplicate-paragraph"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "duplicate-reference-definition"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "empty-link-target"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "multiple-h1"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "near-duplicate-files"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "placeholder-marker"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "stale-time-phrase"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "trailing-fullwidth-after-url"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "C"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "undefined-reference-label"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "unused-reference-definition"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

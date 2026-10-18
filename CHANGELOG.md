@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0 (2026-10-18)
+
+- 预扫新增 `--fail-on <kind,...>` CI 门禁：命中指定候选类型时退出码 1，匹配项写到 stderr（最多 20 条明细，其余 `... and N more`，完整列表看 stdout JSON），stdout 仍输出完整 JSON/文本；默认跳过 `context=fixture` 候选（stderr 说明跳过数，退出码仍为 0；明细中的夹具候选标 `[fixture]`），`--include-fixtures` 可显式包含；kind 逗号分隔且不允许空项，未知 kind/空项按用法错误退出 2（退出码约定 0/1/2）。
+- 新增 references/pre-scan.schema.json（JSON Schema 2020-12）：固定预扫输出契约（字段、kind 枚举、kind→类别映射、summary 结构），CI 用真实输出校验。
+- CI 新增「pre-scan contract & gate」步骤：生成输出 → schema 校验 → 对结构性失效类（死链/图片/锚点/大小写/空目标/未定义引用）做门禁；docs-qa 门禁从五道增至六道，release 工作流经 workflow_call 自动继承。
+- scripts/check-docs.mjs 新增自洽检查：schema 的 kind 枚举只允许在 $defs.kind 定义一次，candidate.kind 与 summary.by_kind.propertyNames 必须 $ref 复用它；脚本 CATEGORY、枚举与 allOf 类别映射不一致会直接报错。
+- 自测断言从 708 增至 744，新增 --fail-on 用例：命中/未命中退出码、stderr 摘要、未知 kind、缺少值、空列表/尾随逗号、`--fail-on=` 形式、与 --text 组合、重复 kind 去重、多目标提示、默认跳过 fixture 与 `--include-fixtures`。
+- 同步更新 references/tool-configs.md（用法、退出码、输出契约、CI 模板）、README（目录树、六道门禁、预扫用法）、SKILL.md（工具表、深入阅读）；版本号升至 1.9.0。
+
 ## 1.8.0 (2026-10-18)
 
 - 修复脚注误报：`[^1]: ...` 等脚注定义不再被当作本地链接目标检查（此前会把脚注正文首词当路径，报 broken-local-link）；脚注正文里的引用式链接仍会检查。

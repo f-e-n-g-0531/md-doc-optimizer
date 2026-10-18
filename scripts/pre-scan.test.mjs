@@ -191,6 +191,8 @@ function runAssertions(tmp) {
   addFile('docs/my_file.md', '# My File\n\nTarget for the escaped-underscore link.\n');
   mkdirSync(join(tmp, 'docs', 'img'), { recursive: true });
   writeFileSync(join(tmp, 'docs', 'img', 'present.png'), 'png');
+  addFile('clean/ok.md', '# OK\n\n[ok](#ok)\n');
+  addFile('gateonly/test/fixtures/bad.md', '# Fixture\n\n[bad](./nope.md)\n');
   addFile('docs/master.md',
     '# Master Branch\n\n[tree link](https://github.com/some-owner/some-repo/tree/master/docs)\n');
   addFile('docs/fullwidth.md',
@@ -466,9 +468,11 @@ function runAssertions(tmp) {
   eq(example.length, 1, 'example- basename candidate present');
   eq(example[0].context, 'fixture', 'example- basename context is fixture');
 
+  const FIXTURE_SEGMENTS = ['test', 'tests', 'fixtures', '__fixtures__', '__snapshots__'];
   for (const candidate of candidates) {
-    const fixtureFile = candidate.file.startsWith('test/') ||
-      candidate.file.split('/').pop().startsWith('example-');
+    const parts = candidate.file.split('/');
+    const fixtureFile = parts.slice(0, -1).some((part) => FIXTURE_SEGMENTS.includes(part)) ||
+      parts[parts.length - 1].startsWith('example-');
     eq(candidate.context, fixtureFile ? 'fixture' : 'docs', 'context derived from path: ' + candidate.file);
   }
 
@@ -514,6 +518,67 @@ function runAssertions(tmp) {
   }
   ok(fileTargetError !== null, 'file (non-directory) target exits non-zero');
   eq(fileTargetError.status, 2, 'file target exit code 2');
+
+  // ---- --fail-on 门禁 ----
+  const cleanDir = join(tmp, 'clean');
+  const gateMiss = spawnSync(process.execPath, [scriptPath, cleanDir, '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
+  eq(gateMiss.status, 0, '--fail-on miss on clean fixture exits 0');
+  eq(gateMiss.stderr, '', '--fail-on miss writes nothing to stderr');
+
+  const gateHit = spawnSync(process.execPath, [scriptPath, tmp, '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
+  eq(gateHit.status, 1, '--fail-on hit exits 1');
+  ok(gateHit.stderr.includes('matched --fail-on (broken-local-link)'), 'gate stderr names the configured kind');
+  ok(gateHit.stderr.includes('docs/broken-link.md:3'), 'gate stderr lists the matching candidate');
+  ok(gateHit.stdout.includes('"tool": "md-doc-optimizer-pre-scan"'), 'gate still writes the full JSON to stdout');
+
+  const gateEqualsForm = spawnSync(process.execPath,
+    [scriptPath, tmp, '--fail-on=broken-local-link,placeholder-marker', '--text'], { encoding: 'utf8' });
+  eq(gateEqualsForm.status, 1, '--fail-on= form with multiple kinds works');
+  ok(gateEqualsForm.stdout.startsWith('md-doc-optimizer pre-scan'), 'gate with --text keeps text output');
+
+  const gateUnknown = spawnSync(process.execPath, [scriptPath, tmp, '--fail-on', 'no-such-kind'], { encoding: 'utf8' });
+  eq(gateUnknown.status, 2, 'unknown --fail-on kind exits 2');
+  ok(gateUnknown.stderr.includes('unknown --fail-on kind: no-such-kind'), 'unknown kind error message');
+
+  const gateMissingValue = spawnSync(process.execPath, [scriptPath, tmp, '--fail-on'], { encoding: 'utf8' });
+  eq(gateMissingValue.status, 2, '--fail-on without a value exits 2');
+
+  const gateEmptyList = spawnSync(process.execPath, [scriptPath, tmp, '--fail-on='], { encoding: 'utf8' });
+  eq(gateEmptyList.status, 2, '--fail-on with an empty list exits 2');
+  ok(gateEmptyList.stderr.includes('without empty entries'), 'empty list error message');
+
+  const gateTrailingComma = spawnSync(process.execPath,
+    [scriptPath, cleanDir, '--fail-on', 'broken-local-link,'], { encoding: 'utf8' });
+  eq(gateTrailingComma.status, 2, 'trailing comma in kinds exits 2');
+  ok(gateTrailingComma.stderr.includes('without empty entries'), 'trailing comma error message');
+
+  const gateSwallowedFlag = spawnSync(process.execPath,
+    [scriptPath, cleanDir, '--fail-on', '--text'], { encoding: 'utf8' });
+  eq(gateSwallowedFlag.status, 2, '--fail-on followed by an option exits 2');
+  ok(gateSwallowedFlag.stderr.includes('before "--text"'), 'swallowed option error message');
+
+  const gateTwoTargets = spawnSync(process.execPath, [scriptPath, cleanDir, cleanDir], { encoding: 'utf8' });
+  eq(gateTwoTargets.status, 2, 'two positional targets exit 2');
+  ok(gateTwoTargets.stderr.includes('multiple kinds need --fail-on'), 'multiple positional error hints at --fail-on');
+
+  const gateDuplicateKinds = spawnSync(process.execPath,
+    [scriptPath, cleanDir, '--fail-on', 'broken-local-link,broken-local-link'], { encoding: 'utf8' });
+  eq(gateDuplicateKinds.status, 0, 'duplicate kinds are accepted and deduped');
+
+  // 默认跳过 fixture 上下文（夹具里的坏链接是内容本身）；--include-fixtures 显式包含
+  const gateDir = join(tmp, 'gateonly');
+  const gateFixtureSkip = spawnSync(process.execPath,
+    [scriptPath, gateDir, '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
+  eq(gateFixtureSkip.status, 0, '--fail-on skips fixture candidates by default');
+  ok(gateFixtureSkip.stderr.includes('fixture candidate(s) skipped (use --include-fixtures)'),
+    'skipped fixture count is explained');
+
+  const gateFixtureInclude = spawnSync(process.execPath,
+    [scriptPath, gateDir, '--fail-on', 'broken-local-link', '--include-fixtures'], { encoding: 'utf8' });
+  eq(gateFixtureInclude.status, 1, '--include-fixtures makes the gate fail on fixture candidates');
+  ok(gateFixtureInclude.stderr.includes('test/fixtures/bad.md:3'),
+    'included fixture candidate is listed');
+  ok(gateFixtureInclude.stderr.includes('[fixture]'), 'fixture candidates are marked in gate details');
 }
 
 function main() {

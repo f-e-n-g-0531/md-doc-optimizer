@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.8.0"
+  version: "1.9.0"
 ---
 
 # Markdown 文档优化器
@@ -160,7 +160,7 @@ metadata:
 
 | 目标 | 工具 | 作用 |
 |---|---|---|
-| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、疑似生成副本；只报候选 |
+| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、疑似生成副本；只报候选；`--fail-on` 可直接做 CI 门禁（默认跳过测试夹具） |
 | 结构去重 | markdownlint / remark-lint | MD024 重复标题、MD025 多 H1、未使用定义等 |
 | 文风/冗余 | Vale + write-good/proselint/alex | 口水词、被动语态、客套、歧视用语 |
 | 链接失效 | lychee、markdown-link-check | 找 404/死链/锚点失效 |
@@ -190,6 +190,7 @@ metadata:
 - references/english-docs.md —— 英文文档专项规则（含 Vale/write-good 结果判断）
 - references/reporting.md —— 报告字段、JSON 契约、PR/commit 模板
 - references/report.schema.json —— 报告 JSON Schema（CI 校验用）
+- references/pre-scan.schema.json —— 预扫输出 JSON Schema（CI 契约校验）
 - references/sources.md —— 同领域项目/工具与出处
 - references/tool-configs.md —— 现成工具配置
 - references/drift-playbook.md —— 文档 vs 代码漂移核对

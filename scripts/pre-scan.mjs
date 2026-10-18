@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // md-doc-optimizer 预扫描（pre-scan）：只读扫描目标目录下的 Markdown，输出确定性候选清单。
-// 用法：node scripts/pre-scan.mjs [target-dir] [--text]（默认扫描当前目录；退出码 0 成功、2 用法错误）
+// 用法：node scripts/pre-scan.mjs [target-dir] [--text] [--fail-on kind1,kind2] [--include-fixtures]
+// 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法错误
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, relative, dirname, parse } from 'node:path';
 
@@ -593,6 +594,36 @@ function compareCandidates(a, b) {
   return 0;
 }
 
+// --fail-on 命中时把匹配项写到 stderr 并返回 1；stdout 的 JSON/文本输出保持不变。
+// 默认跳过 fixture 上下文（测试夹具里的坏链接是内容本身），--include-fixtures 可显式包含。
+function evaluateGate(result, failOn, includeFixtures) {
+  if (failOn.size === 0) return 0;
+  const matched = result.candidates.filter((candidate) => failOn.has(candidate.kind));
+  const relevant = includeFixtures ? matched : matched.filter((candidate) => candidate.context !== 'fixture');
+  const skipped = matched.length - relevant.length;
+  const skippedNote = skipped > 0
+    ? '; ' + skipped + ' fixture candidate(s) skipped (use --include-fixtures)'
+    : '';
+  if (relevant.length === 0) {
+    if (skipped > 0) {
+      process.stderr.write('pre-scan: 0 candidate(s) matched --fail-on' + skippedNote + '\n');
+    }
+    return 0;
+  }
+  process.stderr.write('pre-scan: ' + relevant.length + ' candidate(s) matched --fail-on (' +
+    Array.from(failOn).join(', ') + ')' + skippedNote + '\n');
+  const limit = 20;
+  for (const candidate of relevant.slice(0, limit)) {
+    process.stderr.write('  ' + candidate.file + ':' + candidate.line + ' [' + candidate.category + '] ' +
+      candidate.kind + (candidate.context === 'fixture' ? ' [fixture]' : '') +
+      ' -- ' + candidate.evidence + '\n');
+  }
+  if (relevant.length > limit) {
+    process.stderr.write('  ... and ' + (relevant.length - limit) + ' more (full list is in the JSON output)\n');
+  }
+  return 1;
+}
+
 function renderText(result) {
   const kinds = Object.keys(result.summary.by_kind)
     .map((kind) => kind + '=' + result.summary.by_kind[kind])
@@ -620,17 +651,48 @@ function renderText(result) {
 function main() {
   const args = process.argv.slice(2);
   let textMode = false;
+  let includeFixtures = false;
+  const failOn = new Set();
   const positional = [];
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--text') {
       textMode = true;
-    } else if (arg.startsWith('-') && arg !== '-') {
-      usageError('unknown option: ' + arg);
-    } else {
-      positional.push(arg);
+      continue;
     }
+    if (arg === '--include-fixtures') {
+      includeFixtures = true;
+      continue;
+    }
+    if (arg === '--fail-on' || arg.startsWith('--fail-on=')) {
+      let value;
+      if (arg === '--fail-on') {
+        value = args[++i];
+        if (value === undefined) usageError('--fail-on requires a comma-separated list of kinds');
+      } else {
+        value = arg.slice('--fail-on='.length);
+      }
+      if (value.startsWith('-')) {
+        usageError('--fail-on requires a comma-separated list of kinds before "' + value + '"');
+      }
+      const kinds = value.split(',').map((kind) => kind.trim());
+      if (kinds.some((kind) => kind === '')) {
+        usageError('--fail-on needs comma-separated kinds without empty entries');
+      }
+      for (const kind of kinds) {
+        if (!Object.prototype.hasOwnProperty.call(CATEGORY, kind)) {
+          usageError('unknown --fail-on kind: ' + kind);
+        }
+        failOn.add(kind);
+      }
+      continue;
+    }
+    if (arg.startsWith('-') && arg !== '-') usageError('unknown option: ' + arg);
+    positional.push(arg);
   }
-  if (positional.length > 1) usageError('expected at most one target directory');
+  if (positional.length > 1) {
+    usageError('expected at most one target directory (multiple kinds need --fail-on kind1,kind2)');
+  }
   const targetArg = positional.length === 1 ? positional[0] : process.cwd();
   let targetStat = null;
   try {
@@ -702,6 +764,7 @@ function main() {
   } else {
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   }
+  process.exitCode = evaluateGate(result, failOn, includeFixtures);
 }
 
 main();

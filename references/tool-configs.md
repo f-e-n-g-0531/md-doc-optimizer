@@ -169,9 +169,14 @@ lychee --config ./lychee.toml --no-progress "**/*.md"
 ~~~bash
 node scripts/pre-scan.mjs <目标目录>          # 输出 JSON 候选清单
 node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
+node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link,broken-anchor  # 命中即失败
 ~~~
 
 `--text` 每行按 `file:line [类别] kind -- evidence | 原文` 输出：`evidence` 是命中的具体词或路径（例如同一行里的「目前」「最近」会分别列出），便于逐条 triage。
+
+`--fail-on <kind,...>` 是 CI 门禁：命中指定 kind 时退出码为 1，匹配项写到 stderr（最多 20 条明细，其余以 `... and N more` 提示，完整列表看 stdout JSON）；stdout 仍输出完整 JSON/文本，便于同时存档。**默认跳过 `context=fixture` 的候选**（测试夹具里的坏链接是内容本身），需要时加 `--include-fixtures`。kind 用逗号分隔、不能有空项；未知 kind 或空项按用法错误退出 2。退出码：**0 成功、1 门禁命中、2 用法错误**。仅跳过 fixture 时也会在 stderr 写一行跳过计数（退出码仍是 0）；门禁明细里的 fixture 候选会标 `[fixture]`。
+
+输出契约见 references/pre-scan.schema.json（JSON Schema 2020-12）；CI 会用真实输出做校验。新增或改名 kind 时必须同步 schema，`scripts/check-docs.mjs` 会比对脚本 CATEGORY、schema 枚举与类别映射。
 
 覆盖的候选类型（kind / 类别）：
 
@@ -216,9 +221,9 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 
 ## GitHub Actions —— 组合检查（自包含版）
 
-文件 `.github/workflows/docs-qa.yml`。下面这份可直接复制，门禁步骤与本仓库实际文件一致（额外只有说明注释和末尾可选的 Vale 段）：markdownlint、链接检查、文档自洽检查、预扫自测与报告 Schema 校验是必过门禁；Vale 需先备好风格包、默认注释，按需启用。
+文件 `.github/workflows/docs-qa.yml`。下面这份可直接复制，门禁步骤与本仓库实际文件一致（额外只有说明注释和末尾可选的 Vale 段）：markdownlint、链接检查、文档自洽检查、预扫自测、预扫契约与门禁、报告 Schema 校验是必过门禁；Vale 需先备好风格包、默认注释，按需启用。
 
-下面三步「docs consistency / pre-scan self-test / validate report schema」依赖本仓库的 scripts/check-docs.mjs、scripts/pre-scan.test.mjs 与 references/report.schema.json；复制到其他仓库时按需删改，或换成自己的自洽检查。
+下面四步「docs consistency / pre-scan self-test / pre-scan contract & gate / validate report schema」依赖本仓库的 scripts/check-docs.mjs、scripts/pre-scan.test.mjs、scripts/pre-scan.mjs 与 references/ 下的两个 schema；复制到其他仓库时按需删改，或换成自己的自洽检查。
 
 ~~~yaml
 name: docs-qa
@@ -268,6 +273,13 @@ jobs:
 
       - name: pre-scan self-test
         run: node scripts/pre-scan.test.mjs
+
+      # 预扫输出契约 + 结构性门禁（依赖 references/pre-scan.schema.json 与 scripts/pre-scan.mjs）
+      - name: pre-scan contract & gate
+        run: |
+          node scripts/pre-scan.mjs . > "$RUNNER_TEMP/pre-scan-out.json"
+          npx --yes ajv-cli@5 validate --spec=draft2020 -s references/pre-scan.schema.json -d "$RUNNER_TEMP/pre-scan-out.json"
+          node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,case-mismatch-link,empty-link-target,undefined-reference-label
 
       # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/*.json）
       - name: validate report schema

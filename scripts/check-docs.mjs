@@ -60,6 +60,7 @@ if (existsSync(refDir)) {
   }
 }
 mustReference.push('references/report.schema.json');
+mustReference.push('references/pre-scan.schema.json');
 for (const r of mustReference) {
   if (!skill.includes(r)) errors.push(`${r} 未被 SKILL.md 引用`);
 }
@@ -90,12 +91,82 @@ for (const m of readme.matchAll(/\]\(\.\/([^)#\s]+)/g)) {
   if (!existsSync(abs(m[1]))) errors.push(`README 本地链接失效: ${m[1]}`);
 }
 
-// 6) 报告 schema 与示例必须是合法 JSON
-for (const p of ['references/report.schema.json', 'examples/report.sample.json']) {
+// 6) schema 与示例必须是合法 JSON
+for (const p of ['references/report.schema.json', 'references/pre-scan.schema.json', 'examples/report.sample.json']) {
   try {
     JSON.parse(read(p));
   } catch (e) {
     errors.push(`${p} 不是合法 JSON: ${e.message}`);
+  }
+}
+
+// 7) 预扫 schema 的 kind 枚举与类别映射必须与 scripts/pre-scan.mjs 的 CATEGORY 一致
+const preScanSrc = read('scripts/pre-scan.mjs');
+const categoryBlock = preScanSrc.match(/const CATEGORY = \{([\s\S]*?)\n\};/);
+if (!categoryBlock) {
+  errors.push('scripts/pre-scan.mjs 找不到 CATEGORY 定义');
+} else {
+  const scriptKinds = new Map();
+  for (const m of categoryBlock[1].matchAll(/'([a-z0-9-]+)':\s*'([ABC])'/g)) scriptKinds.set(m[1], m[2]);
+  let preScanSchema = null;
+  try {
+    preScanSchema = JSON.parse(read('references/pre-scan.schema.json'));
+  } catch (e) {
+    // JSON 合法性已在上一步报告
+  }
+  const def = preScanSchema && preScanSchema.$defs && preScanSchema.$defs.candidate;
+  const kindDef = preScanSchema && preScanSchema.$defs && preScanSchema.$defs.kind;
+  const byKind = preScanSchema && preScanSchema.properties && preScanSchema.properties.summary &&
+    preScanSchema.properties.summary.properties && preScanSchema.properties.summary.properties.by_kind;
+  if (scriptKinds.size === 0) errors.push('scripts/pre-scan.mjs 的 CATEGORY 为空');
+  if (!def || !kindDef) {
+    if (preScanSchema) errors.push('references/pre-scan.schema.json 缺少 $defs.kind 或 $defs.candidate');
+  } else {
+    // kind 枚举只允许在 $defs.kind 定义一次；candidate.kind 与 summary.by_kind.propertyNames 必须「只」引用它，
+    // 旁挂 enum / 重复或冲突的 allOf 映射都会让 check-docs 通过而 ajv 拒绝，因此这里做严格结构校验。
+    const isOnlyKindRef = (value) => Boolean(value) && typeof value === 'object' &&
+      Object.keys(value).length === 1 && value.$ref === '#/$defs/kind';
+    if (!def.properties || !isOnlyKindRef(def.properties.kind)) {
+      errors.push('pre-scan schema 的 candidate.kind 必须且只能引用 #/$defs/kind');
+    }
+    if (!byKind || !isOnlyKindRef(byKind.propertyNames)) {
+      errors.push('pre-scan schema 的 summary.by_kind.propertyNames 必须且只能引用 #/$defs/kind');
+    }
+    const enumList = Array.isArray(kindDef.enum) ? kindDef.enum : [];
+    const enumKinds = new Set(enumList);
+    if (enumKinds.size !== enumList.length) errors.push('pre-scan schema 的 $defs.kind.enum 有重复项');
+    const allOf = Array.isArray(def.allOf) ? def.allOf : [];
+    const mappedKinds = new Map();
+    const allOfKeys = new Set(['if', 'then', '$comment', 'description', 'title']);
+    for (const item of allOf) {
+      if (!Object.prototype.hasOwnProperty.call(item, 'if') || !Object.prototype.hasOwnProperty.call(item, 'then')) {
+        errors.push('pre-scan schema 的 allOf 条目必须包含 if/then');
+      }
+      for (const key of Object.keys(item)) {
+        if (!allOfKeys.has(key)) errors.push('pre-scan schema 的 allOf 条目包含未知键: ' + key);
+      }
+      const kind = item.if && item.if.properties && item.if.properties.kind && item.if.properties.kind.const;
+      const category = item.then && item.then.properties && item.then.properties.category && item.then.properties.category.const;
+      if (!kind || !['A', 'B', 'C'].includes(category)) {
+        errors.push('pre-scan schema 的 allOf 条目必须把 kind 映射到 A/B/C');
+        continue;
+      }
+      if (mappedKinds.has(kind)) errors.push(`pre-scan schema 的 allOf 重复定义类别: ${kind}`);
+      mappedKinds.set(kind, category);
+    }
+    if (allOf.length !== scriptKinds.size) {
+      errors.push(`pre-scan schema 的 allOf 条目数（${allOf.length}）应等于 CATEGORY kind 数（${scriptKinds.size}）`);
+    }
+    for (const [kind, category] of scriptKinds) {
+      if (!enumKinds.has(kind)) errors.push(`pre-scan schema 的 kind 枚举缺少: ${kind}`);
+      if (mappedKinds.get(kind) !== category) errors.push(`pre-scan schema 类别不一致: ${kind} 应为 ${category}`);
+    }
+    for (const kind of enumKinds) {
+      if (!scriptKinds.has(kind)) errors.push(`pre-scan schema 多出 unknown kind: ${kind}`);
+    }
+    for (const kind of mappedKinds.keys()) {
+      if (!scriptKinds.has(kind)) errors.push(`pre-scan schema allOf 多出 unknown kind: ${kind}`);
+    }
   }
 }
 
