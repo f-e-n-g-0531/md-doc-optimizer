@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.13.0 (2026-10-18)
+
+- 支持 setext 标题（`Title` + `===`/`---`，含 blockquote/列表内与多行段落）：参与 slug、重复标题、多 H1 与锚点计算；段落去重跳过标题行。
+- 支持缩进代码块（4 空格/tab，近似块上下文）：内容不再参与链接/引用/标题/标记扫描；列表续行与 blockquote 内代码按上下文处理。
+- HTML 内链/图片增强：标签可跨行（属性换行），支持 `<source src>`、`<img srcset>`、`<source srcset>`；`data-*` 与属性值里的 `href=` 不误报；含 `data:`/查询串的 srcset 按启发式跳过。
+- near-duplicate 从 O(n²) 全量比较改为「小仓精确 + 大仓 MinHash+LSH 候选对 + 精确 Jaccard」，超过 50 个候选文件自动启用。
+- 已知限制更新：去掉 setext、缩进代码、多行属性、O(n²) 等已解决项；保留近似块上下文、超大仓分批、HTML 不覆盖 style/JS、srcset 启发式跳过。
+- 自测断言从 969 增至 1069，覆盖 setext、缩进代码、跨行 HTML、srcset、LSH 路径。
+- 同步更新 references/tool-configs.md、README、SKILL.md；版本号升至 1.13.0。
+
 ## 1.12.0 (2026-10-18)
 
 - 预扫新增原始 HTML 内链/图片检查：`<a href>`、`<img src>` 的本地相对路径复用 broken-local-link/image、broken-anchor、case-mismatch-link 规则；`data-href`/`data-src` 等非真实属性不误报，外部 URL 仍交给 lychee。

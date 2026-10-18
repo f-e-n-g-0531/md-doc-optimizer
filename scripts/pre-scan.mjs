@@ -10,6 +10,12 @@ const TOOL = 'md-doc-optimizer-pre-scan';
 const SCHEMA_VERSION = 1;
 const BASELINE_TOOL = 'md-doc-optimizer-pre-scan-baseline';
 const BASELINE_SCHEMA_VERSION = 1;
+// near-duplicate：小仓精确两两比较；大仓用 MinHash + LSH 取候选对，再做精确 Jaccard
+const NEAR_DUP_THRESHOLD = 0.8;
+const NEAR_DUP_BRUTE_LIMIT = 50;
+const NEAR_DUP_HASHES = 64;
+const NEAR_DUP_BANDS = 16;
+const NEAR_DUP_ROWS = 4;
 // 行内抑制标记（HTML 注释，不渲染）：只影响候选上报，不影响解析。
 // 允许在标记后写 ": 原因"；按注释边界解析，外层 HTML 注释里的标记字面量不生效。
 const MARKER_DISABLE_BODY_RE = /^pre-scan-disable(?:\s*:[\s\S]*)?$/i;
@@ -51,8 +57,9 @@ const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g;
 const CONTAINER_FENCE_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*(`{3,}|~{3,})(.*)$/;
 // 原始 HTML 块：<pre>/<script>/<style>/<textarea>，块内不是 Markdown
 const HTML_RAW_BLOCK_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*<(pre|script|style|textarea)\b/i;
-// 原始 HTML 内的本地链接/图片：先匹配完整标签，再按属性解析，避免把属性值里的 "href=" 当链接
-const HTML_TAG_RE = /<(a|img)\b((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/gi;
+// 原始 HTML 内的本地链接/图片：先匹配完整标签，再按属性解析，避免把属性值里的 "href=" 当链接。
+// 标签可跨行（属性换行），srcset 按逗号拆成候选 URL。
+const HTML_TAG_RE = /^<(a|img|source)\b((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/i;
 const HTML_ATTR_RE = /([^\s=>/]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
 const LINK_TARGET_URL_RE = /\]\(\s*<?(https?:\/\/[^\s()<>）】」》]+)/g;
 const BARE_URL_RE = /https?:\/\/[^\s<>"'`()）】」》]+/g;
@@ -140,6 +147,16 @@ function fenceTokenOf(line) {
   return { char: m[1][0], len: m[1].length, info: m[2] };
 }
 
+// 剥离 blockquote / 列表标记，便于识别容器内的 setext 标题
+function stripContainerPrefix(line) {
+  let text = line;
+  const quote = text.match(/^(?: {0,3}> ?)+/);
+  if (quote) text = text.slice(quote[0].length);
+  const list = text.match(/^\s*(?:[-*+]|\d+[.)])\s+/);
+  if (list) text = text.slice(list[0].length);
+  return text;
+}
+
 // 标题先取渲染文本（去 HTML 标签、链接语法、行内代码标记），再解码实体，最后算 slug
 function headingPlainText(raw) {
   const rendered = raw.replace(/<[^>]*>/g, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`/g, '').trim();
@@ -175,6 +192,10 @@ function analyzeFile(absPath, targetAbs) {
   let fence = null;
   let fenceCommentOpen = false;
   let htmlRawBlock = null;
+  let indentedCode = false;
+  let listContentIndent = 0;
+  let listQuoteDepth = 0;
+  let lastLineBlank = true;
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
     const line = lines[i];
@@ -195,6 +216,46 @@ function analyzeFile(absPath, targetAbs) {
       if (maskInlineCode(line).includes('-->')) fenceCommentOpen = false;
       continue; // 注释内容不是 Markdown，不参与围栏判断
     }
+    // 缩进代码块（近似块上下文）：4 空格/tab 缩进、前一行为空/文件开头，且不在列表续行内。
+    // blockquote 前缀先剥掉再算缩进；保留 fence/raw HTML/注释的优先级。
+    const quotePrefix = line.match(/^(?: {0,3}> ?)+/);
+    const contentLine = quotePrefix ? line.slice(quotePrefix[0].length) : line;
+    const quoteDepth = quotePrefix ? (quotePrefix[0].match(/>/g) || []).length : 0;
+    if (quoteDepth !== listQuoteDepth) {
+      listContentIndent = 0;
+      listQuoteDepth = quoteDepth;
+    }
+    if (indentedCode) {
+      if (!contentLine.trim()) {
+        ignored[i] = true;
+        continue;
+      }
+      const codeIndent = contentLine.match(/^\s*/)[0].replace(/\t/g, '    ').length;
+      if (codeIndent >= listContentIndent + 4) {
+        ignored[i] = true;
+        continue;
+      }
+      indentedCode = false;
+    }
+    const contentTrimmed = contentLine.trim();
+    const contentIndent = contentLine.match(/^\s*/)[0].replace(/\t/g, '    ').length;
+    const listMarker = contentLine.match(/^(\s*)([-*+]|\d+[.)])\s+/);
+    if (contentTrimmed) {
+      if (listMarker) {
+        listContentIndent = listMarker[0].length;
+        listQuoteDepth = quoteDepth;
+      } else if (contentIndent < listContentIndent) {
+        listContentIndent = 0;
+      }
+      if (!listMarker && lastLineBlank && contentIndent >= listContentIndent + 4 &&
+        !fenceTokenOf(contentLine) && !HTML_RAW_BLOCK_RE.test(contentLine)) {
+        indentedCode = true;
+        ignored[i] = true;
+        lastLineBlank = false;
+        continue;
+      }
+    }
+    lastLineBlank = !contentTrimmed;
     const token = fenceTokenOf(line);
     if (token) {
       if (!(token.char === '`' && token.info.includes('`'))) {
@@ -260,14 +321,41 @@ function analyzeFile(absPath, targetAbs) {
     linkMasked[i] = masked.replace(ESCAPED_OPEN_BRACKET_RE, '  ');
   }
 
-  // ATX 标题（# 到 ######）；slug 统一生成，复现 GitHub 对重复标题追加 -1/-2 的规则
+  // ATX 与 setext 标题按文档顺序收集；slug 统一生成，复现 GitHub 对重复标题追加 -1/-2 的规则
   const headings = [];
+  const setextLines = new Set(); // 标题文本行 + 下划线行，段落去重时跳过
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
-    const m = commentMasked[i].match(/^(#{1,6})[ \t]+(.+?)\s*$/);
-    if (!m) continue;
-    const text = m[2].replace(/[ \t]+#+\s*$/, '').trim();
-    if (text) headings.push({ line: i + 1, level: m[1].length, text: text });
+    const m = stripContainerPrefix(commentMasked[i]).match(/^\s{0,3}(#{1,6})[ \t]+(.+?)\s*$/);
+    if (m) {
+      const text = m[2].replace(/[ \t]+#+\s*$/, '').trim();
+      if (text) headings.push({ line: i + 1, level: m[1].length, text: text });
+      continue;
+    }
+    if (i + 1 >= lines.length || ignored[i + 1]) continue;
+    const underlineText = stripContainerPrefix(commentMasked[i + 1]).trim();
+    const underline = underlineText.match(/^(=+|-+)$/);
+    if (!underline) continue;
+    // 标题文本是下划线前紧邻的段落（可多行、可位于 blockquote/列表内）
+    const collected = [];
+    let startLine = i;
+    for (let j = i; j >= 0; j--) {
+      if (ignored[j]) break;
+      const stripped = stripContainerPrefix(commentMasked[j]).trim();
+      if (!stripped) break;
+      if (/^#{1,6}(?:\s|$)/.test(stripped) || /^\s{0,3}</.test(stripped) ||
+        /^(?:=+|-+)$/.test(stripped) || /^\[[^\]]+\]:/.test(stripped)) break;
+      collected.unshift(stripped);
+      startLine = j;
+    }
+    if (collected.length === 0) continue;
+    headings.push({
+      line: startLine + 1,
+      level: underline[1][0] === '=' ? 1 : 2,
+      text: collected.join(' '),
+    });
+    for (let j = startLine; j <= i + 1; j++) setextLines.add(j);
+    i += 1;
   }
   const headingSlugs = new Set();
   for (const heading of headings) {
@@ -395,6 +483,7 @@ function analyzeFile(absPath, targetAbs) {
     ignored: ignored,
     headings: headings,
     headingSlugs: headingSlugs,
+    setextLines: setextLines,
     explicitAnchors: explicitAnchors,
     linkMasked: linkMasked,
     commentMasked: commentMasked,
@@ -514,6 +603,39 @@ function detectLocal(doc, docsByAbs, add) {
     if (rawAnchor && !isImage) checkAnchor(lineNo, onDisk.actualAbs, rawAnchor);
   };
 
+  // 1.0) 原始 HTML 内链/图片（标签可跨行，含 srcset）
+  for (let i = 0; i < lines.length; i++) {
+    const masked = doc.linkMasked[i] || '';
+    if (masked.indexOf('<') < 0) continue;
+    for (const start of masked.matchAll(/<(a|img|source)\b/gi)) {
+      let tagText = masked.slice(start.index);
+      let endLine = i;
+      let guard = 0;
+      while (!tagText.includes('>') && endLine + 1 < lines.length && guard < 20) {
+        endLine += 1;
+        guard += 1;
+        tagText += '\n' + (doc.linkMasked[endLine] || '');
+      }
+      const tag = tagText.match(HTML_TAG_RE);
+      if (!tag) continue;
+      const tagName = tag[1].toLowerCase();
+      for (const attr of tag[2].matchAll(HTML_ATTR_RE)) {
+        const name = attr[1].toLowerCase();
+        const value = attr[2] !== undefined ? attr[2] : attr[3] !== undefined ? attr[3] : attr[4];
+        if (!value) continue;
+        if ((tagName === 'a' && name === 'href') || (tagName !== 'a' && name === 'src')) {
+          checkLink(i + 1, value, { image: tagName !== 'a' });
+        } else if (tagName !== 'a' && name === 'srcset') {
+          if (/data:/i.test(value) || value.includes('?')) continue;
+          for (const part of value.split(',')) {
+            const url = part.trim().split(/\s+/)[0];
+            if (url) checkLink(i + 1, url, { image: true });
+          }
+        }
+      }
+    }
+  }
+
   // 1) 链接 / 锚点 / 硬编码 master 分支 / URL 后贴全角标点
   for (let i = 0; i < lines.length; i++) {
     if (doc.ignored[i]) continue;
@@ -536,17 +658,7 @@ function detectLocal(doc, docsByAbs, add) {
       add(doc, lineNo, 'empty-link-target',
         (m[1] === '!' ? 'image' : 'link') + ' target is empty: ' + m[0].trim());
     }
-    for (const tag of masked.matchAll(HTML_TAG_RE)) {
-      const tagName = tag[1].toLowerCase();
-      let target = null;
-      for (const attr of tag[2].matchAll(HTML_ATTR_RE)) {
-        const name = attr[1].toLowerCase();
-        if ((tagName === 'a' && name === 'href') || (tagName === 'img' && name === 'src')) {
-          target = attr[2] !== undefined ? attr[2] : attr[3] !== undefined ? attr[3] : attr[4];
-        }
-      }
-      if (target) checkLink(lineNo, target, { image: tagName === 'img' });
-    }
+    // 原始 HTML 标签由下方的跨行遍历统一处理
     for (const m of masked.matchAll(MASTER_RE)) {
       add(doc, lineNo, 'default-branch-master-link', 'hardcoded /master/ path; verify repository default branch');
       break;
@@ -636,7 +748,7 @@ function detectLocal(doc, docsByAbs, add) {
     current = [];
   };
   for (let i = 0; i < lines.length; i++) {
-    if (doc.ignored[i] || !lines[i].trim()) {
+    if (doc.ignored[i] || !lines[i].trim() || (doc.setextLines && doc.setextLines.has(i))) {
       flush();
       continue;
     }
@@ -655,23 +767,80 @@ function detectLocal(doc, docsByAbs, add) {
   }
 }
 
+// FNV-1a + seed，用于 MinHash
+function hashText(text, seed) {
+  let hash = (2166136261 ^ seed) >>> 0;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash;
+}
+
+// 每个文件的行集合 -> MinHash 签名（NEAR_DUP_HASHES 个最小值）
+function minhashSignature(nonEmptyLines) {
+  const seeds = Array.from({ length: NEAR_DUP_HASHES }, (_, i) => Math.imul(i + 1, 0x9e3779b1) >>> 0);
+  const signature = new Array(NEAR_DUP_HASHES).fill(0xffffffff);
+  for (const line of nonEmptyLines) {
+    for (let s = 0; s < NEAR_DUP_HASHES; s++) {
+      const value = hashText(line, seeds[s]);
+      if (value < signature[s]) signature[s] = value;
+    }
+  }
+  return signature;
+}
+
+// 大仓：按 band 分桶取候选对（LSH），避免 O(n²) 全量比较
+function lshCandidatePairs(listed) {
+  const signatures = listed.map((doc) => minhashSignature(doc.nonEmptyLines));
+  const buckets = new Map();
+  for (let index = 0; index < listed.length; index++) {
+    for (let band = 0; band < NEAR_DUP_BANDS; band++) {
+      const start = band * NEAR_DUP_ROWS;
+      const key = band + ':' + signatures[index].slice(start, start + NEAR_DUP_ROWS).join(',');
+      const bucket = buckets.get(key);
+      if (bucket) bucket.push(index);
+      else buckets.set(key, [index]);
+    }
+  }
+  const pairs = new Set();
+  for (const bucket of buckets.values()) {
+    for (let i = 0; i < bucket.length; i++) {
+      for (let j = i + 1; j < bucket.length; j++) {
+        const a = Math.min(bucket[i], bucket[j]);
+        const b = Math.max(bucket[i], bucket[j]);
+        pairs.add(a + ',' + b);
+      }
+    }
+  }
+  return [...pairs]
+    .map((pair) => pair.split(',').map(Number))
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+}
+
 // 两文件规范化非空行集合的 Jaccard 相似度 >= 0.8 即 near-duplicate，只在字典序较小文件报一条
 function detectNearDuplicates(docs, add) {
   const listed = docs.filter((doc) => doc.nonEmptyLines.size >= 10)
     .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
-  for (let i = 0; i < listed.length; i++) {
-    for (let j = i + 1; j < listed.length; j++) {
-      const a = listed[i];
-      const b = listed[j];
-      let intersection = 0;
-      for (const line of a.nonEmptyLines) {
-        if (b.nonEmptyLines.has(line)) intersection++;
-      }
-      const union = a.nonEmptyLines.size + b.nonEmptyLines.size - intersection;
-      if (union === 0 || intersection / union < 0.8) continue;
-      add(a, 1, 'near-duplicate-files',
-        'near-duplicate of ' + b.rel + ' (Jaccard ' + (intersection / union).toFixed(2) + ')');
+  let pairs = [];
+  if (listed.length <= NEAR_DUP_BRUTE_LIMIT) {
+    for (let i = 0; i < listed.length; i++) {
+      for (let j = i + 1; j < listed.length; j++) pairs.push([i, j]);
     }
+  } else {
+    pairs = lshCandidatePairs(listed);
+  }
+  for (const [i, j] of pairs) {
+    const a = listed[i];
+    const b = listed[j];
+    let intersection = 0;
+    for (const line of a.nonEmptyLines) {
+      if (b.nonEmptyLines.has(line)) intersection++;
+    }
+    const union = a.nonEmptyLines.size + b.nonEmptyLines.size - intersection;
+    if (union === 0 || intersection / union < NEAR_DUP_THRESHOLD) continue;
+    add(a, 1, 'near-duplicate-files',
+      'near-duplicate of ' + b.rel + ' (Jaccard ' + (intersection / union).toFixed(2) + ')');
   }
 }
 

@@ -210,6 +210,32 @@ function runAssertions(tmp) {
     'TODO: reported.', '',
     '`<!-- pre-scan-ignore -->` TODO: reported too.', '',
   ].join('\n'));
+  addFile('docs/indented-code.md',
+    '# Indented Code\n\n' +
+    '    [broken in indented code](./nope1.md)\n' +
+    '    <!-- pre-scan-disable -->\n\n' +
+    '[visible](./nope2.md)\n\n' +
+    '- item\n\n    continuation paragraph with [broken](./nope3.md)\n\n' +
+    '>     [broken in quote code](./nope4.md)\n>\n> [visible quote](./nope5.md)\n');
+  addFile('docs/setext.md',
+    '# Setext Heading\n\nSub Title\n---------\n\n[ok](#sub-title)\n\n' +
+    'Another Section\n---------------\n\n[ok2](#another-section)\n\n' +
+    '> Quoted Setext\n> -------------\n\n[quoted](#quoted-setext)\n\n' +
+    '- List Setext\n  ------------\n\n[list](#list-setext)\n\n' +
+    'Multi\nLine\n----\n\n[multi](#multi-line)\n\n' +
+    '> ## Quoted ATX\n\n[qatx](#quoted-atx)\n\n' +
+    '- ## List ATX\n\n[latx](#list-atx)\n\n' +
+    '   ## Indented ATX\n\n[iatx](#indented-atx)\n');
+  addFile('docs/setext-duplicate.md',
+    '# Setext Dup\n\nRepeat\n------\n\nrepeat body.\n\nRepeat\n------\n\n[second](#repeat-1)\n');
+  addFile('docs/html-multiline.md',
+    '# HTML Multiline\n\n' +
+    '<a\n  href="./missing-multi.md">multi</a>\n\n' +
+    '<img\n  src="./img/absent.png" alt="multi">\n\n' +
+    '<img srcset="./img/absent.png 1x, ./img/present.png 2x" alt="srcset">\n\n' +
+    '<source srcset="./img/absent2.png 2x">\n\n' +
+    '<img srcset="data:image/png;base64,AAAA 1x" alt="data uri">\n\n' +
+    '<img srcset="./x.png?q=1,2 2x" alt="query comma">\n');
   addFile('docs/html-links.md',
     '# HTML Links\n\n' +
     '<a href="./missing-html.md">bad</a>\n\n' +
@@ -474,6 +500,23 @@ function runAssertions(tmp) {
 
   eq(ofFile('docs/suppression-reason.md'), [], 'markers accept a ": reason" suffix');
 
+  const indentedCode = ofFile('docs/indented-code.md');
+  eq(indentedCode.map((c) => c.kind), ['broken-local-link', 'broken-local-link', 'broken-local-link'],
+    'indented code blocks are ignored; list continuations and blockquotes are scanned');
+  eq(indentedCode.map((c) => c.line), [6, 10, 14], 'indented code candidate lines');
+
+  const setext = ofFile('docs/setext.md');
+  eq(setext, [], 'setext headings produce usable anchors');
+  const setextDup = ofFile('docs/setext-duplicate.md');
+  eq(setextDup.map((c) => c.kind), ['duplicate-heading'], 'duplicate setext headings are detected');
+  eq(setextDup[0].line, 8, 'duplicate setext heading line');
+
+  const htmlMultiline = ofFile('docs/html-multiline.md');
+  eq(htmlMultiline.map((c) => c.kind),
+    ['broken-local-link', 'broken-local-image', 'broken-local-image', 'broken-local-image'],
+    'multiline HTML attributes and srcset are checked');
+  eq(htmlMultiline.map((c) => c.line), [3, 6, 9, 11], 'multiline HTML candidate lines');
+
   const htmlLinks = ofFile('docs/html-links.md');
   eq(htmlLinks.map((c) => c.kind),
     ['broken-local-link', 'broken-anchor', 'broken-local-image', 'case-mismatch-link'],
@@ -621,6 +664,26 @@ function runAssertions(tmp) {
   }
   ok(fileTargetError !== null, 'file (non-directory) target exits non-zero');
   eq(fileTargetError.status, 2, 'file target exit code 2');
+
+  // ---- 大仓 near-duplicate：MinHash + LSH 路径 ----
+  const manyNearDir = join(tmp, 'many-near');
+  mkdirSync(manyNearDir, { recursive: true });
+  const lshSharedLines = Array.from({ length: 12 }, (_, i) => 'shared body line ' + i);
+  writeFileSync(join(manyNearDir, 'a.md'), ['# Shared', '', ...lshSharedLines, 'only A'].join('\n'));
+  writeFileSync(join(manyNearDir, 'b.md'), ['# Shared', '', ...lshSharedLines, 'only B'].join('\n'));
+  for (let i = 0; i < 58; i++) {
+    const name = 'd' + String(i).padStart(2, '0') + '.md';
+    const body = Array.from({ length: 12 }, (_, j) => 'distractor ' + i + ' line ' + j);
+    writeFileSync(join(manyNearDir, name), ['# Distractor ' + i, '', ...body].join('\n'));
+  }
+  const manyRun = spawnSync(process.execPath, [scriptPath, manyNearDir], { encoding: 'utf8' });
+  eq(manyRun.status, 0, 'large corpus scan exits 0');
+  const manyResult = JSON.parse(manyRun.stdout);
+  const manyNear = manyResult.candidates.filter((candidate) => candidate.kind === 'near-duplicate-files');
+  eq(manyNear.length, 1, 'LSH finds the single near-duplicate pair among 60 files');
+  eq(manyNear[0].file, 'a.md', 'near-duplicate reported at the lexicographically smaller file');
+  ok(manyNear[0].evidence.includes('b.md'), 'near-duplicate evidence names the paired file');
+  ok(manyNear[0].evidence.includes('0.87'), 'near-duplicate evidence keeps the exact Jaccard');
 
   // ---- --fail-on 门禁 ----
   const cleanDir = join(tmp, 'clean');

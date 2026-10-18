@@ -188,7 +188,7 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 | `<!-- pre-scan-ignore-next-line -->` | 抑制下一行的候选 |
 | `<!-- pre-scan-disable -->` … `<!-- pre-scan-enable -->` | 抑制区间内的候选；未闭合时抑制到文件末尾 |
 
-- 只影响候选上报，不影响标题/链接/锚点等解析。**作用域边界**：顶层/容器围栏、单行行内代码、`<pre>` 等原始 HTML 块、外层多行 HTML 注释里的标记不生效；缩进代码块（4 空格）里的标记仍会生效——代码示例请用围栏。没有激活区间时 `pre-scan-enable` 是 no-op。
+- 只影响候选上报，不影响标题/链接/锚点等解析。**作用域边界**：顶层/容器围栏、单行行内代码、`<pre>` 等原始 HTML 块、外层多行 HTML 注释、缩进代码块里的标记都不生效（缩进代码按近似块上下文判断，极端边界可能有偏差）。没有激活区间时 `pre-scan-enable` 是 no-op。
 - 标记后可用 `: 原因` 写说明（如 `<!-- pre-scan-ignore: 规则示例 -->`）；被抑制的候选不会进入 JSON、summary、baseline 与 `--fail-on` 门禁。标记本身是 HTML 注释，读者不可见。
 
 存量仓库可用 baseline 做「只拦新增」的棘轮（ratchet）：
@@ -199,10 +199,9 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 
 **已知限制**（按需接受）：
 
-- 缩进代码块（4 空格）里的抑制标记仍会生效；代码示例请用围栏。
-- setext 标题（`Title` + `---`）不参与锚点计算。
-- `near-duplicate-files` 为 O(n²)，数千文件的大仓库建议先按 docs/ 等子目录分批扫描；v1.12 起围栏/原始 HTML 块行不再计入相似度，Jaccard 数值可能与旧版不同（旧 baseline 需重建）。
-- 原始 HTML 只检查 `<a href>` / `<img src>` 的本地相对路径（不处理 `srcset`、`style`、JS 注入链接）；多行属性（`<a\nhref=...>`）不解析。
+- 缩进代码块/容器嵌套按近似块上下文识别，极端嵌套可能偏差；代码示例仍建议用围栏。
+- `near-duplicate-files` 超过 50 个候选文件时走 MinHash+LSH 近似召回（再做精确 Jaccard），极大规模仓库仍建议分批；v1.12 起围栏/原始 HTML 块行、v1.13 起缩进代码行不计入相似度，旧 baseline 可能需重建。
+- 原始 HTML 只检查 `<a href>`、`<img src/srcset>`、`<source src/srcset>` 的本地相对路径；含 `data:`/查询串的 `srcset` 按启发式跳过；不处理 `style`/JS 注入链接。
 
 输出契约见 references/pre-scan.schema.json（JSON Schema 2020-12）；CI 会用真实输出做校验。新增或改名 kind 时必须同步 schema，`scripts/check-docs.mjs` 会比对脚本 CATEGORY、schema 枚举与类别映射。
 
@@ -211,7 +210,7 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 | kind | 类别 | 说明 |
 |---|---|---|
 | broken-local-link | B | 相对路径链接（Markdown 或 `<a href>`）指向不存在的文件 |
-| broken-local-image | B | 相对路径图片（Markdown 或 `<img src>`）指向不存在的文件 |
+| broken-local-image | B | 相对路径图片（Markdown 或 `<img src>` / `srcset` / `<source>`）指向不存在的文件 |
 | case-mismatch-link | B | 路径大小写与磁盘真实文件名不一致：Windows/macOS 本地能打开，Linux/CI 上 404 |
 | broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在（按 GitHub 锚点规则计算） |
 | empty-link-target | B | 空链接/图片目标：`[]()`、`[]( "title")`、`[](<> "title")`、空定义 `[label]:` |
@@ -236,12 +235,13 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 - **引用式链接**：支持完整 `[text][label]`、折叠 `[label][]` 与快捷 `[label]`（含快捷图片 `![alt]`）；定义可位于行首、blockquote 或列表项内，目标可换行；脚注 `[^1]: ...` 不是链接定义、不参与检查，但脚注正文里的引用仍会扫描。
 - **图片**：只检查本地相对路径（含图片形式的引用定义、`[![alt](img)](link)` 嵌套写法，以及 alt 内嵌一层方括号）；外部 URL 交给 lychee 等链接检查器。
 - **HTML 注释**：注释里的链接、引用定义、标题与显式锚点都不参与检查；注释里的围栏标记也不能吞掉注释后的正文。
-- **原始 HTML**：检查 `<a href>` 与 `<img src>` 的本地相对路径（含锚点、大小写；`data-href`/`data-src` 不算）；外部 URL 交给 lychee。`<pre>`/`<script>`/`<style>`/`<textarea>` 块内不扫描。
-- **代码上下文**：顶层与 blockquote/列表内的围栏、`<pre>` 等原始 HTML 块（含容器内）都识别，内容整体忽略；缩进代码块见下方已知限制。
+- **原始 HTML**：检查 `<a href>`、`<img src/srcset>`、`<source src/srcset>` 的本地相对路径（含锚点、大小写；标签可跨行；`data-*` 与属性值里的 `href=` 不误报）；外部 URL 交给 lychee。`<pre>`/`<script>`/`<style>`/`<textarea>` 块内不扫描。
+- **代码上下文**：顶层与 blockquote/列表内的围栏、`<pre>` 等原始 HTML 块（含容器内）、4 空格/tab 缩进代码块都识别（缩进代码按近似块上下文判断），内容整体忽略。
+- **标题**：ATX（#）与 setext（`Title` + `===`/`---`）都参与 slug、重复标题与多 H1 计算。
 - **路径分隔符**：链接里的反斜杠（含编码后的 `%5C`）按 GitHub 行为报失效——线上会变成 `%5C` 404，即使 Windows 本地能打开；统一用 `/`。CommonMark 的标点转义（如 `my\_file.md`）先解转义，不算分隔符。
 - **空目标**：`[]()`、`[]( "title")`、`[](<> "title")` 报空目标；按 CommonMark，`]("title")` 的引号属于 destination，按普通链接核对；`[label]:`（无目标）属启发式候选（CommonMark 会按普通段落渲染），需人工确认。
 
-`near-duplicate-files` 为两两文件比较（O(n²)）：数千个 Markdown 的大仓库会偏慢，可先对 docs/ 等子目录分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
+`near-duplicate-files` 小仓精确两两比较；超过 50 个候选文件自动改用 MinHash+LSH 取候选对再做精确 Jaccard（阈值 0.8，近似召回），超大仓库仍可分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
 
 自测：`node scripts/pre-scan.test.mjs`（CI 会跑）。
 
