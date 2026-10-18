@@ -46,7 +46,7 @@ grep -n "TODO" docs/design.md test/*.md   # 命中设计草稿注释与测试夹
 - 影响：读者点开「默认解析器」的实现链接会 404，共 3 个 URL、3 个文件里合计 9 处。
 - 建议改法：改 `docs/index.md` 源文件，再 `pnpm docs:readme` 重新生成 README；README.zh-CN.md 需手工同步。
 
-### 4.2 独立版文件名写错：dist/zhlint.js 不存在（High，Category C）
+### 4.2 独立版文件名写错：dist/zhlint.js 不存在（High，Category B）
 
 - 位置：docs/index.md:153（README.md:141、README.zh-CN.md:141 同源）
 - 原文：``You could find a JavaScript file `dist/zhlint.js` as a standalone version.``

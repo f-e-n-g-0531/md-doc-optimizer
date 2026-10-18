@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // md-doc-optimizer 预扫描（pre-scan）：只读扫描目标目录下的 Markdown，输出确定性候选清单。
 // 用法：node scripts/pre-scan.mjs [target-dir] [--text]（默认扫描当前目录；退出码 0 成功、2 用法错误）
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, resolve, relative, dirname } from 'node:path';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve, relative, dirname, parse } from 'node:path';
 
 const TOOL = 'md-doc-optimizer-pre-scan';
 const SCHEMA_VERSION = 1;
@@ -13,7 +13,7 @@ const FULLWIDTH_CHARS = new Set(['）', '】', '」', '》']);
 
 // 每个候选 kind 固定归入 A（冗余）/ B（过期失效）/ C（事实不符）三类
 const CATEGORY = {
-  'broken-local-link': 'B', 'broken-anchor': 'B', 'default-branch-master-link': 'B',
+  'broken-local-link': 'B', 'case-mismatch-link': 'B', 'broken-anchor': 'B', 'default-branch-master-link': 'B',
   'trailing-fullwidth-after-url': 'C', 'stale-time-phrase': 'B', 'placeholder-marker': 'B',
   'duplicate-heading': 'A', 'duplicate-paragraph': 'A', 'multiple-h1': 'A', 'near-duplicate-files': 'A',
 };
@@ -29,6 +29,8 @@ const FENCE_OPEN_RE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
 const FENCE_CLOSE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 const LINK_TARGET_URL_RE = /\]\(\s*<?(https?:\/\/[^\s()<>）】」》]+)/g;
 const BARE_URL_RE = /https?:\/\/[^\s<>"'`()）】」》]+/g;
+// 显式 HTML 锚点（<a name="x"> / <span id='y'>）：GitHub 上 #x 可直接命中
+const HTML_ANCHOR_RE = /<[a-zA-Z][a-zA-Z0-9-]*[^<>]*?\s(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
 function usageError(message) {
   process.stderr.write('pre-scan: ' + message + '\n');
@@ -80,13 +82,29 @@ function maskUrls(text) {
   return text.replace(BARE_URL_RE, (match) => ' '.repeat(match.length));
 }
 
-// GitHub-ish 锚点：小写，只保留 CJK/字母/数字/空格/连字符，空格转连字符
+// GitHub-ish 锚点：小写；保留字母/数字/下划线/连字符（GitHub 保留 _）；空格逐个转连字符
 function slugify(text) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-');
+  return text.toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '').replace(/ /g, '-');
 }
-// 标题里的链接/图片/行内代码标记先去掉，再算 slug
+// HTML 实体解码：标题里写成 R&amp;D 时，GitHub 按渲染后的 R&D 算 slug
+function decodeEntities(text) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+  return text.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (match, dec, hex, name) => {
+    if (dec || hex) {
+      const code = parseInt(dec || hex, dec ? 10 : 16);
+      if (Number.isFinite(code)) {
+        try { return String.fromCodePoint(code); } catch (err) { return match; }
+      }
+      return match;
+    }
+    const value = named[name.toLowerCase()];
+    return value === undefined ? match : value;
+  });
+}
+// 标题先取渲染文本（去 HTML 标签、链接语法、行内代码标记），再解码实体，最后算 slug
 function headingPlainText(raw) {
-  return raw.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`/g, '').trim();
+  const rendered = raw.replace(/<[^>]*>/g, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`/g, '').trim();
+  return decodeEntities(rendered).trim();
 }
 
 // 解析单个 Markdown 文件：行、围栏/frontmatter 忽略标记、标题、规范化行集合
@@ -130,14 +148,33 @@ function analyzeFile(absPath, targetAbs) {
     ignored[i] = true;
   }
 
-  // ATX 标题（# 到 ######）与锚点 slug
+  // ATX 标题（# 到 ######）；slug 统一生成，复现 GitHub 对重复标题追加 -1/-2 的规则
   const headings = [];
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
     const m = lines[i].match(/^(#{1,6})[ \t]+(.+?)\s*$/);
     if (!m) continue;
     const text = m[2].replace(/[ \t]+#+\s*$/, '').trim();
-    if (text) headings.push({ line: i + 1, level: m[1].length, text: text, slug: slugify(headingPlainText(text)) });
+    if (text) headings.push({ line: i + 1, level: m[1].length, text: text });
+  }
+  const headingSlugs = new Set();
+  for (const heading of headings) {
+    const base = slugify(headingPlainText(heading.text));
+    let slug = base;
+    let suffix = 1;
+    while (headingSlugs.has(slug)) slug = base + '-' + (suffix++);
+    if (slug) headingSlugs.add(slug);
+    heading.slug = slug;
+  }
+
+  // 显式 HTML 锚点：<a name="x"> / <span id="x">，与标题 slug 一起作为合法锚点
+  const explicitAnchors = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (ignored[i]) continue;
+    for (const m of maskInlineCode(lines[i]).matchAll(HTML_ANCHOR_RE)) {
+      const anchor = String(m[1] !== undefined ? m[1] : m[2] || '').trim();
+      if (anchor) explicitAnchors.add(anchor);
+    }
   }
 
   // 文件相似度用的规范化非空行集合（围栏内容不计入）
@@ -155,6 +192,8 @@ function analyzeFile(absPath, targetAbs) {
     lines: lines,
     ignored: ignored,
     headings: headings,
+    headingSlugs: headingSlugs,
+    explicitAnchors: explicitAnchors,
     nonEmptyLines: nonEmptyLines,
   };
 }
@@ -171,6 +210,38 @@ function phraseHits(text, re) {
   return hits.map((hit) => hit.phrase);
 }
 
+// 目录名缓存：大小写核对要逐段 readdir，避免同一目录重复读取
+const dirEntries = new Map();
+function listDir(dir) {
+  if (!dirEntries.has(dir)) {
+    let names = null;
+    try { names = readdirSync(dir); } catch (err) { names = null; }
+    dirEntries.set(dir, names);
+  }
+  return dirEntries.get(dir);
+}
+// 逐段核对磁盘上的真实大小写。Windows/macOS 的文件系统不区分大小写，existsSync 会放行
+// 在 Linux/CI 上必然 404 的路径；这里按 readdir 的真实文件名比对，跨平台结果一致。
+function resolveOnDisk(absTarget) {
+  const root = parse(absTarget).root;
+  const segments = absTarget.slice(root.length).split(/[\\/]/).filter(Boolean);
+  let actualAbs = root;
+  let mismatch = null;
+  for (const segment of segments) {
+    const names = listDir(actualAbs);
+    if (!names) return { exists: false };
+    let actualName = names.includes(segment) ? segment : null;
+    if (!actualName) {
+      const lower = segment.toLowerCase();
+      actualName = names.find((name) => name.toLowerCase() === lower) || null;
+      if (!actualName) return { exists: false };
+      if (!mismatch) mismatch = { linked: segment, disk: actualName };
+    }
+    actualAbs = join(actualAbs, actualName);
+  }
+  return { exists: true, actualAbs: actualAbs, mismatch: mismatch };
+}
+
 function detectLocal(doc, docsByAbs, add) {
   const lines = doc.lines;
 
@@ -184,9 +255,11 @@ function detectLocal(doc, docsByAbs, add) {
     } catch (err) {
       // 保留原值
     }
-    anchor = anchor.trim().toLowerCase();
-    if (!anchor || targetDoc.headings.some((heading) => heading.slug === anchor)) return;
-    add(doc, lineNo, 'broken-anchor', 'anchor #' + rawAnchor + ' has no matching heading slug');
+    anchor = anchor.trim();
+    if (!anchor) return;
+    if (targetDoc.explicitAnchors.has(anchor)) return; // 显式 HTML 锚点区分大小写
+    if (targetDoc.headingSlugs.has(anchor.toLowerCase())) return;
+    add(doc, lineNo, 'broken-anchor', 'anchor #' + rawAnchor + ' has no matching heading slug or explicit HTML anchor');
   };
 
   const checkLink = (lineNo, rawTarget) => {
@@ -209,11 +282,17 @@ function detectLocal(doc, docsByAbs, add) {
       // 保留原值
     }
     const absTarget = resolve(dirname(doc.absPath), decodedPath);
-    if (!existsSync(absTarget)) {
+    const onDisk = resolveOnDisk(absTarget);
+    if (!onDisk.exists) {
       add(doc, lineNo, 'broken-local-link', 'relative link target not found: ' + pathPart);
       return;
     }
-    if (rawAnchor) checkAnchor(lineNo, absTarget, rawAnchor);
+    if (onDisk.mismatch) {
+      add(doc, lineNo, 'case-mismatch-link',
+        'path case differs from on-disk name: ' + onDisk.mismatch.linked + ' -> ' + onDisk.mismatch.disk +
+        ' (case-sensitive file systems will 404)');
+    }
+    if (rawAnchor) checkAnchor(lineNo, onDisk.actualAbs, rawAnchor);
   };
 
   // 1) 链接 / 锚点 / 硬编码 master 分支 / URL 后贴全角标点
@@ -350,10 +429,10 @@ function renderText(result) {
     'by kind: ' + (kinds || '(none)'),
   ];
   if (result.candidates.length > 0) {
-    lines.push('candidates:');
+    lines.push('candidates (file:line [category] kind -- evidence | excerpt):');
     for (const candidate of result.candidates) {
       lines.push('  ' + candidate.file + ':' + candidate.line + ' [' + candidate.category + '] ' +
-        candidate.kind + ' -- ' + candidate.excerpt);
+        candidate.kind + ' -- ' + candidate.evidence + ' | ' + candidate.excerpt);
     }
   }
   return lines.join('\n') + '\n';

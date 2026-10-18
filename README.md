@@ -113,7 +113,7 @@ md-doc-optimizer/
 
 ## 质量门禁（本仓库 CI）
 
-[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 每次推送 / PR 自动跑五道检查：
+[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 在 main 分支推送或提交 PR（改动命中 paths 过滤）时自动跑五道检查：
 
 | 检查 | 命令 | 作用 |
 | --- | --- | --- |
@@ -125,7 +125,7 @@ md-doc-optimizer/
 
 推送 `v*` 标签（或手动触发 release 工作流）会先过同一套检查，再发布 GitHub Release。
 
-仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON（`--text` 为人读摘要），供 P2 收集候选用。**候选必须再人工核对，不是结论。**
+仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON；`--text` 按 `文件:行 [类别] kind -- 证据 | 原文` 输出人读摘要（证据是命中的具体词或路径）。候选覆盖死链/锚点（按 GitHub 锚点规则计算）、大小写不一致的路径（跨平台一致）、硬编码分支链接、时间敏感词、重复标题/段落与疑似生成副本，供 P2 收集候选用。**候选必须再人工核对，不是结论。**
 
 ## 实测案例（真实仓库，报告模式）
 

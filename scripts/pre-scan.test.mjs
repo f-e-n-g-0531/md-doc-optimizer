@@ -12,6 +12,7 @@ const scriptPath = join(dirname(fileURLToPath(import.meta.url)), 'pre-scan.mjs')
 
 const ALLOWED_KINDS = [
   'broken-local-link',
+  'case-mismatch-link',
   'broken-anchor',
   'default-branch-master-link',
   'trailing-fullwidth-after-url',
@@ -24,6 +25,7 @@ const ALLOWED_KINDS = [
 ];
 const CATEGORY_OF = {
   'broken-local-link': 'B',
+  'case-mismatch-link': 'B',
   'broken-anchor': 'B',
   'default-branch-master-link': 'B',
   'trailing-fullwidth-after-url': 'C',
@@ -87,6 +89,22 @@ function runAssertions(tmp) {
   addFile('docs/cross-anchor.md',
     '# Cross Anchor\n\n[ok](anchors-target.md#target-heading)\n[中文](anchors-target.md#中文标题)\n\n' +
     '[bad](anchors-target.md#no-such-heading)\n');
+  addFile('docs/anchor-edge.md',
+    '# Anchor Edge\n\n' +
+    '## foo_bar\n\n[underscore](#foo_bar)\n\n' +
+    '## R&amp;D\n\n[entity](#rd)\n\n' +
+    '<a name="legacy"></a>\n\n[html name anchor](#legacy)\n\n' +
+    '<span id="span-id"></span>\n\n[html id anchor](#span-id)\n\n' +
+    '## <code>Tag</code> Title\n\n[html tag](#tag-title)\n\n' +
+    '[bad](#missing-edge-anchor)\n');
+  addFile('docs/anchor-duplicate.md',
+    '# Dup Anchors\n\n## Notes\n\nfirst\n\n## Notes\n\nsecond\n\n' +
+    '[second](#notes-1)\n\n[first](#notes)\n\n[missing](#notes-2)\n');
+  addFile('docs/case-target.md', '# Case Target\n\nTarget file for case mismatch.\n');
+  addFile('docs/case-link.md',
+    '# Case Link\n\n[wrong file case](./Case-Target.md)\n\n[right case](./case-target.md)\n\n' +
+    '[wrong dir case](sub/File.md)\n');
+  addFile('docs/sub/file.md', '# Sub File\n\nLinked with a wrong-case path.\n');
   addFile('docs/master.md',
     '# Master Branch\n\n[tree link](https://github.com/some-owner/some-repo/tree/master/docs)\n');
   addFile('docs/fullwidth.md',
@@ -211,6 +229,25 @@ function runAssertions(tmp) {
   eq(crossAnchors.map((c) => c.kind), ['broken-anchor'], 'cross-file broken anchor detected, CJK anchor ignored');
   eq(crossAnchors[0].line, 6, 'cross-file broken anchor line');
 
+  const anchorEdge = ofFile('docs/anchor-edge.md');
+  eq(anchorEdge.map((c) => c.kind), ['broken-anchor'],
+    'underscore / entity / HTML-property headings and explicit HTML anchors are recognized');
+  eq(anchorEdge[0].line, 23, 'only the genuinely missing anchor is reported');
+  ok(anchorEdge[0].evidence.includes('explicit HTML anchor'), 'broken anchor evidence mentions HTML anchors');
+
+  const anchorDup = ofFile('docs/anchor-duplicate.md');
+  eq(anchorDup.map((c) => c.kind), ['duplicate-heading', 'broken-anchor'],
+    'duplicate headings get -1 suffix; only the nonexistent -2 anchor is reported');
+  eq(anchorDup.map((c) => c.line), [7, 15], 'duplicate heading and anchor lines');
+
+  const caseLinks = ofFile('docs/case-link.md');
+  eq(caseLinks.map((c) => c.kind), ['case-mismatch-link', 'case-mismatch-link'],
+    'file and directory case mismatches are reported on every platform');
+  eq(caseLinks.map((c) => c.line), [3, 7], 'case mismatch lines');
+  ok(caseLinks[0].evidence.includes('Case-Target.md -> case-target.md'),
+    'case mismatch evidence shows linked name -> on-disk name');
+  eq(ofFile('docs/case-target.md'), [], 'correctly-cased target file itself is clean');
+
   const masterLinks = ofFile('docs/master.md');
   eq(masterLinks.map((c) => c.kind), ['default-branch-master-link'], 'master-branch link detected');
   eq(masterLinks[0].evidence, 'hardcoded /master/ path; verify repository default branch', 'master evidence');
@@ -292,6 +329,9 @@ function runAssertions(tmp) {
   ok(text.includes('candidates: ' + candidates.length), 'text candidate count matches JSON');
   ok(text.includes('by category: A=' + expectedByCategory.A +
     ', B=' + expectedByCategory.B + ', C=' + expectedByCategory.C), 'text category counts match JSON');
+  ok(text.includes('stale-time-phrase -- currently |'), 'text output includes matched evidence');
+  ok(text.includes('candidates (file:line [category] kind -- evidence | excerpt):'),
+    'text output explains the columns');
   throws(() => JSON.parse(text), 'text mode is not JSON');
 
   // ---- 用法错误：不存在 / 非目录目标 ----

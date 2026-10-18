@@ -27,7 +27,7 @@
 ## 4. 自动化复跑（优先用工具，而非肉眼）
 
 - 链接：lychee / markdown-link-check 出死链清单。
-- 示例代码：mdoctest / markdown-doctest 复跑并核对输出。
+- 示例代码：mdoctest 复跑并核对输出；markdown-doctest 只验证 JS 示例不抛异常，不比对输出。
 - 硬校验：docproof 解析「路径 / flag / 版本 / import」并对照代码与 git 历史。
 - OpenAPI 文档：Redocly respect 跑行为/安全回归，确保文档与 API 一致。
 
@@ -56,8 +56,9 @@
 
 案例：zhlint 的 README 由 `scripts/gen-readme.mjs` 从 `docs/index.md` 生成，某次提交只改 README 和中文 README、没改源文件；下次 `prepublish` 会把这次改进覆盖掉（见 examples/case-study-zhlint.md）。
 
-## 7. 链接核对的三个陷阱
+## 7. 链接核对的四个陷阱
 
 1. **默认分支改名**：`tree/master/...` 在默认分支为 `main` 的仓库上直接 404；以仓库默认分支为准。
 2. **文件改名/迁移**：`.js` → `.ts`、目录重组都会让旧链接失效；404 后到仓库树里找当前路径，不靠猜。
 3. **可达 ≠ 语义匹配**：链接检查工具只证明 HTTP 200；链接文本是否指向声称的内容，要另开目标页核对。本机网络失败的链接标 UNREACHABLE，不等于失效。
+4. **路径大小写**：Windows/macOS 的文件系统不区分大小写，本地能打开的链接在 Linux/CI 上可能 404。用预扫的 `case-mismatch-link` 候选逐段核对真实文件名，不要只信 `ls`。

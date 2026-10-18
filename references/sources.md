@@ -43,7 +43,7 @@
 ## 3. 结构 / 去重 lint（目标 A 的机械部分）
 
 - **markdownlint** — https://github.com/DavidAnson/markdownlint
-  - 规则 MD001–MD060（markdownlint v0.41.1；部分编号已废弃，现含 MD056/MD058/MD059/MD060）。与去冗余直接相关：**MD024 重复标题**、**MD025 多个一级标题**、MD013 行长度、MD036 不要用强调代替标题、MD012 连续多个空行。
+  - 规则编号覆盖 MD001–MD060（有缺号，如 MD057 未定义；npm 最新 v0.42.0，本仓库经 markdownlint-cli2 实测 v0.41.1）。与去冗余直接相关：**MD024 重复标题**、**MD025 多个一级标题**、MD013 行长度、MD036 不要用强调代替标题、MD012 连续多个空行。
   - 配套 CLI：**markdownlint-cli2** — https://github.com/DavidAnson/markdownlint-cli2
 - **remark-lint** — https://github.com/remarkjs/remark-lint
   - unified 插件生态：no-duplicate-headings、no-duplicate-definitions、no-unused-definitions、no-dead-urls、no-empty-url 等，可组合成自定义规则集。
@@ -96,6 +96,16 @@
 - **awesome-docs** — https://github.com/testthedocs/awesome-docs （文档工具大全）
 - **awesome-markdown-devtools** — https://github.com/dp1620/awesome-markdown-devtools
 - **awesome-markdown** — https://github.com/mansucache/awesome-markdown
+
+## 10. 中文专项 lint（目标 A/C 的机械部分）
+
+- **zhlint** — https://github.com/zhlint-project/zhlint
+  - 中文标点、全半角与中英文空格；`--fix` 会改动技术内容，只建议 check-only（实测见 references/cjk-doc-rules.md 第 7 节）。
+- **lint-md** — https://github.com/lint-md/lint-md （核心库）；CLI — https://github.com/lint-md/cli
+  - 中文 Markdown 综合 lint，规则可按仓库风格收敛。
+- **pangu** — https://github.com/vinta/pangu.js
+  - 在 CJK 与拉丁字母/数字之间补空格；只输出修正稿，不直接写回。
+- 映射：A、C（排版与术语一致性）
 
 ## 使用建议
 

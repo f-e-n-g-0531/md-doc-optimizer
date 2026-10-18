@@ -171,12 +171,15 @@ node scripts/pre-scan.mjs <目标目录>          # 输出 JSON 候选清单
 node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 ~~~
 
+`--text` 每行按 `file:line [类别] kind -- evidence | 原文` 输出：`evidence` 是命中的具体词或路径（例如同一行里的「目前」「最近」会分别列出），便于逐条 triage。
+
 覆盖的候选类型（kind / 类别）：
 
 | kind | 类别 | 说明 |
 |---|---|---|
 | broken-local-link | B | 相对路径链接指向不存在的文件（图片链接暂不检查） |
-| broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在 |
+| case-mismatch-link | B | 路径大小写与磁盘真实文件名不一致：Windows/macOS 本地能打开，Linux/CI 上 404 |
+| broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在（按 GitHub 锚点规则计算） |
 | default-branch-master-link | B | GitHub 链接硬编码 `/tree/master/` 或 `/blob/master/`，需核对默认分支 |
 | trailing-fullwidth-after-url | C | URL 后粘连全角括号/引号，常导致 404 |
 | stale-time-phrase | B | currently / recently / soon / 目前 / 最近 等时间敏感词 |
@@ -188,19 +191,24 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 
 输出结构：`{tool, schema_version, target, files_scanned, candidates[], summary{total, by_kind, by_category}}`；candidates 按 file/line/kind 排序，便于 diff。
 
+锚点与大小写是两类最容易误判的候选，预扫按 GitHub 的实际规则处理：
+
+- **锚点**：保留下划线与连字符；重复标题按出现顺序追加 `-1`、`-2`；标题里的 HTML 标签按渲染文本处理、实体先解码；`<a name="x">`、`<span id="x">` 等显式 HTML 锚点同样算合法目标。
+- **大小写**：不依赖本机文件系统是否区分大小写，而是逐段 `readdir` 比对真实文件名，因此 Windows 开发机与 Linux CI 上的结论一致。
+
 `near-duplicate-files` 为两两文件比较（O(n²)）：数千个 Markdown 的大仓库会偏慢，可先对 docs/ 等子目录分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
 
 自测：`node scripts/pre-scan.test.mjs`（CI 会跑）。
 
 注意：规则文档会引用候选词表本身（如本 skill 的 SKILL.md 写了「目前/最近/TODO」），因此对本仓库运行会得到一批预期内的候选噪音；这类命中应 triage 为 no action，不影响扫描器价值。
 
-2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。
+2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。1.7.0 修正锚点与大小写规则后按同一快照复跑，结果不变（docproof 0；zhlint 30，无新增候选）。
 
 ## GitHub Actions —— 组合检查（自包含版）
 
-文件 `.github/workflows/docs-qa.yml`。markdownlint、链接检查、文档自洽检查与报告 Schema 校验是必过门禁；Vale 需先备好风格包，默认注释掉，按需启用。
+文件 `.github/workflows/docs-qa.yml`。下面这份可直接复制，门禁步骤与本仓库实际文件一致（额外只有说明注释和末尾可选的 Vale 段）：markdownlint、链接检查、文档自洽检查、预扫自测与报告 Schema 校验是必过门禁；Vale 需先备好风格包、默认注释，按需启用。
 
-下面两步「docs consistency / validate report schema」依赖本仓库的 scripts/check-docs.mjs 与 references/report.schema.json；复制到其他仓库时按需删改，或换成自己的自洽检查。
+下面三步「docs consistency / pre-scan self-test / validate report schema」依赖本仓库的 scripts/check-docs.mjs、scripts/pre-scan.test.mjs 与 references/report.schema.json；复制到其他仓库时按需删改，或换成自己的自洽检查。
 
 ~~~yaml
 name: docs-qa
@@ -208,9 +216,25 @@ name: docs-qa
 on:
   push:
     branches: [main]
-    paths: ["**.md", ".markdownlint.yml", "lychee.toml", ".github/workflows/docs-qa.yml", "scripts/**", "**.json"]
+    paths:
+      - "**.md"
+      - "**.markdown"
+      - ".markdownlint.yml"
+      - "lychee.toml"
+      - ".github/workflows/docs-qa.yml"
+      - "scripts/**"
+      - "**.json"
   pull_request:
-    paths: ["**.md", ".markdownlint.yml", "lychee.toml", ".github/workflows/docs-qa.yml", "scripts/**", "**.json"]
+    paths:
+      - "**.md"
+      - "**.markdown"
+      - ".markdownlint.yml"
+      - "lychee.toml"
+      - ".github/workflows/docs-qa.yml"
+      - "scripts/**"
+      - "**.json"
+
+  workflow_call:
 
 permissions:
   contents: read
@@ -232,6 +256,9 @@ jobs:
       - name: docs consistency
         run: node scripts/check-docs.mjs
 
+      - name: pre-scan self-test
+        run: node scripts/pre-scan.test.mjs
+
       # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/*.json）
       - name: validate report schema
         run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"
@@ -239,7 +266,7 @@ jobs:
       - name: check-links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --config ./lychee.toml --no-progress "**/*.md"
+          args: --config ./lychee.toml --no-progress '**/*.md'
           fail: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

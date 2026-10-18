@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0 (2026-10-18)
+
+- 预扫锚点识别对齐 GitHub 实际规则：保留下划线、重复标题按出现顺序追加 `-1`/`-2`、标题内 HTML 标签按渲染文本处理、HTML 实体先解码。修复 `#foo_bar`、`#notes-1`、含 `<code>` 的标题、显式 HTML 锚点等多处误报。
+- 预扫支持显式 HTML 锚点（`<a name="x">`、`<span id="x">`），这类链接不再被误报为 broken-anchor。
+- 预扫新增 `case-mismatch-link` 候选：逐段比对磁盘真实文件名大小写，捕捉「Windows/macOS 本地能打开、Linux/CI 上 404」的链接；不依赖本机文件系统的大小写行为，跨平台结果一致。
+- `--text` 输出改为证据 + 原文双列（`file:line [类别] kind -- evidence | excerpt`），同一行多个候选词可直接区分，无需再切 JSON 查证据。
+- 自测断言从 258 增至 324，覆盖下划线/重复标题/HTML 标签/实体/显式锚点、文件与目录的大小写不一致。
+- 修正文档内部不一致：CI 模板补上 pre-scan 自测、workflow_call 与 **.markdown 触发路径；zhlint 案例 4.2 类别对齐 JSON（C→B）；明确 markdown-doctest 只验证不比对输出；README 触发条件改为「main 分支推送或 PR（命中 paths）」；sources.md 补 zhlint / lint-md / pangu 出处；统一「三段汇总 + Out of scope」口径。
+- 同步更新 references/tool-configs.md（候选类型表、锚点与大小写规则）、audit-checklist.md（锚点规则、路径大小写）、drift-playbook.md（链接核对第 4 个陷阱）与 README；SKILL.md 版本号升至 1.7.0。
+
 ## 1.6.0 (2026-10-18)
 
 - 新增 scripts/pre-scan.mjs：零依赖、只读的候选预扫工具，输出确定性 JSON 候选（本地死链/锚点、硬编码 master 分支链接、URL 粘连全角标点、时间敏感词、占位标记、重复标题/段落、多 H1、疑似生成副本），并标记 fixture 上下文。

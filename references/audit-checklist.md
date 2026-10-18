@@ -20,11 +20,12 @@
 - [ ] 是否有相对/绝对时间表述已过当前日期：目前、最近、近期、刚刚、去年、2023 年起、将于 X 上线。
 - [ ] 指向的文件/目录/脚本/CI 工作流是否仍存在（逐条核对路径）。
 - [ ] 命令/flag/env 是否仍可用（能跑则跑，跑不通记 run-failed）。
-- [ ] 链接是否仍可达（lychee / markdown-link-check / 直接请求），锚点是否仍存在。
+- [ ] 链接是否仍可达（lychee / markdown-link-check / 直接请求），锚点是否仍存在（GitHub 锚点保留 `_`；重复标题依次加 `-1`/`-2`；`<a name>` 等显式锚点也算）。
+- [ ] 路径大小写是否与磁盘真实文件名逐段一致（Windows/macOS 检出时能打开，Linux/CI 上会 404；目录名同样要核对）。
 - [ ] 链接目标是否因**默认分支改名**（master→main）或**文件改名**（.js→.ts、目录迁移）而失效？404 后到仓库树确认当前路径，不臆测。
 - [ ] 版本号 / 依赖 / API 端点 / 配置键是否已改名或删除（对照 package.json、CHANGELOG、发布记录）。
 - [ ] TODO / FIXME / 待补充 / coming soon / TBD 是否早已完成（先排除测试夹具与设计草稿中的 WIP 注释）。
-- [ ] 示例代码输出是否与当前可运行结果一致（mdoctest / markdown-doctest）。
+- [ ] 示例代码输出是否与当前可运行结果一致（mdoctest 比对输出；markdown-doctest 只验证不抛异常，不比对输出）。
 - [ ] 描述的功能是否已下线/改名（如有疑问标 NEEDS_HUMAN）。
 
 ## 目标 C —— 修正与事实不符
@@ -53,4 +54,4 @@
 
 ## 汇总落点
 
-每条最终归入四类之一：Fixed（已改）/ Needs review（NEEDS_HUMAN）/ No action（判定无需改）/ Out of scope（超出本文档职责）。
+每条最终归入三段汇总之一：Fixed（已改）/ Needs review（NEEDS_HUMAN）/ No action（判定无需改）；超出本文档职责的另记 Out of scope，不计入这三段。

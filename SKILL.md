@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.6.0"
+  version: "1.7.0"
 ---
 
 # Markdown 文档优化器
@@ -103,7 +103,7 @@ metadata:
 - 逐条解析链接并探测（lychee / markdown-link-check / 直接请求）。
 - 实际运行命令/示例（能跑则跑；跑不了的记录 run-failed 作为证据）。
 - 核对版本与日期（package.json / requirements / CHANGELOG / 发布记录）。
-- 先跑内置预扫脚本生成候选清单：`node scripts/pre-scan.mjs <目标目录>`（本地死链/锚点、疑似默认分支链接、时间敏感词、重复标题/段落、疑似生成副本等）；输出是候选，不是结论。
+- 先跑内置预扫脚本生成候选清单：`node scripts/pre-scan.mjs <目标目录>`（本地死链/锚点、跨平台大小写路径、疑似默认分支链接、时间敏感词、重复标题/段落、疑似生成副本等）；输出是候选，不是结论。
 - 再用 markdownlint、Vale、mdoctest 补充结构/文风/示例候选；所有预扫输出都当作「待核对清单」，不作为最终结论。
 
 ### P3 逐条核对与分级
@@ -158,7 +158,7 @@ metadata:
 
 | 目标 | 工具 | 作用 |
 |---|---|---|
-| 候选预扫 | scripts/pre-scan.mjs | 本地死链/锚点、硬编码 master 链接、时间词、重复标题/段落、疑似生成副本；只报候选 |
+| 候选预扫 | scripts/pre-scan.mjs | 本地死链/锚点、跨平台大小写路径、硬编码 master 链接、时间词、重复标题/段落、疑似生成副本；只报候选 |
 | 结构去重 | markdownlint / remark-lint | MD024 重复标题、MD025 多 H1、未使用定义等 |
 | 文风/冗余 | Vale + write-good/proselint/alex | 口水词、被动语态、客套、歧视用语 |
 | 链接失效 | lychee、markdown-link-check | 找 404/死链/锚点失效 |
