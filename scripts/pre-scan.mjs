@@ -10,6 +10,12 @@ const TOOL = 'md-doc-optimizer-pre-scan';
 const SCHEMA_VERSION = 1;
 const BASELINE_TOOL = 'md-doc-optimizer-pre-scan-baseline';
 const BASELINE_SCHEMA_VERSION = 1;
+// 行内抑制标记（HTML 注释，不渲染）：只影响候选上报，不影响解析。
+// 允许在标记后写 ": 原因"；按注释边界解析，外层 HTML 注释里的标记字面量不生效。
+const MARKER_DISABLE_BODY_RE = /^pre-scan-disable(?:\s*:[\s\S]*)?$/i;
+const MARKER_ENABLE_BODY_RE = /^pre-scan-enable(?:\s*:[\s\S]*)?$/i;
+const MARKER_IGNORE_LINE_BODY_RE = /^pre-scan-ignore(?:\s*:[\s\S]*)?$/i;
+const MARKER_IGNORE_NEXT_BODY_RE = /^pre-scan-ignore-next-line(?:\s*:[\s\S]*)?$/i;
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'vendor', '.venv', 'venv']);
 const FIXTURE_SEGMENTS = new Set(['test', 'tests', 'fixtures', '__fixtures__', '__snapshots__']);
 const MD_EXT = /\.(?:md|markdown)$/i;
@@ -255,6 +261,47 @@ function analyzeFile(absPath, targetAbs) {
     }
   }
 
+  // 行内抑制标记：<!-- pre-scan-ignore --> / -next-line / -disable / -enable
+  // 标记只影响候选上报，不影响标题/链接/锚点等语义解析；围栏代码与行内代码里的标记不生效。
+  const suppressed = new Set();
+  let markersDisabled = false;
+  let outerComment = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (ignored[i]) continue;
+    const text = maskInlineCode(lines[i]);
+    if (markersDisabled) suppressed.add(i);
+    let cursor = 0;
+    while (cursor < text.length) {
+      if (outerComment) {
+        const end = text.indexOf('-->', cursor);
+        if (end < 0) break;
+        outerComment = false;
+        cursor = end + 3;
+        continue;
+      }
+      const start = text.indexOf('<!--', cursor);
+      if (start < 0) break;
+      const end = text.indexOf('-->', start + 4);
+      if (end < 0) {
+        outerComment = true;
+        break;
+      }
+      const body = text.slice(start + 4, end).trim();
+      if (MARKER_DISABLE_BODY_RE.test(body)) {
+        markersDisabled = true;
+        suppressed.add(i);
+      } else if (MARKER_ENABLE_BODY_RE.test(body)) {
+        if (markersDisabled) suppressed.add(i); // 无激活区间时 enable 是 no-op
+        markersDisabled = false;
+      } else if (MARKER_IGNORE_NEXT_BODY_RE.test(body)) {
+        if (i + 1 < lines.length) suppressed.add(i + 1);
+      } else if (MARKER_IGNORE_LINE_BODY_RE.test(body)) {
+        suppressed.add(i);
+      }
+      cursor = end + 3;
+    }
+  }
+
   // 引用式链接：定义 [label]: target 与使用 [text][label] / [label][] / [label]
   // 脚注 [^label]: ... 不是链接定义，先排除，避免把脚注正文当成本地路径
   const refDefinitions = [];
@@ -323,6 +370,7 @@ function analyzeFile(absPath, targetAbs) {
     explicitAnchors: explicitAnchors,
     linkMasked: linkMasked,
     commentMasked: commentMasked,
+    suppressed: suppressed,
     refDefinitions: refDefinitions,
     labelUsage: labelUsage,
     explicitUses: explicitUses,
@@ -831,6 +879,7 @@ function main() {
 
   const candidates = [];
   const add = (doc, line, kind, evidence, excerptOverride) => {
+    if (doc.suppressed && doc.suppressed.has(line - 1)) return;
     const excerpt = excerptOverride === undefined
       ? (doc.lines[line - 1] || '').trim().slice(0, 160)
       : excerptOverride;

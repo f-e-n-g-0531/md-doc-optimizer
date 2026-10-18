@@ -178,6 +178,19 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 
 `--fail-on <kind,...>` 是 CI 门禁：命中指定 kind 时退出码为 1，匹配项写到 stderr（最多 20 条明细，其余以 `... and N more` 提示，完整列表看 stdout JSON）；stdout 仍输出完整 JSON/文本，便于同时存档。**默认跳过 `context=fixture` 的候选**（测试夹具里的坏链接是内容本身），需要时加 `--include-fixtures`。kind 用逗号分隔、不能有空项；未知 kind 或空项按用法错误退出 2。退出码：**0 成功、1 门禁命中、2 用法错误**。仅跳过 fixture 时也会在 stderr 写一行跳过计数（退出码仍是 0）；门禁明细里的 fixture 候选会标 `[fixture]`。
 
+### 行内抑制标记
+
+规则文档会引用候选词、示例会故意写坏链接；这类「内容本身」可以在 Markdown 里用 HTML 注释标记抑制（标记不会渲染）：
+
+| 标记 | 作用 |
+|---|---|
+| `<!-- pre-scan-ignore -->` | 抑制同一行的候选 |
+| `<!-- pre-scan-ignore-next-line -->` | 抑制下一行的候选 |
+| `<!-- pre-scan-disable -->` … `<!-- pre-scan-enable -->` | 抑制区间内的候选；未闭合时抑制到文件末尾 |
+
+- 只影响候选上报，不影响标题/链接/锚点等解析。**作用域边界**：顶层围栏（≤3 空格缩进）与单行行内代码里的标记不生效，外层多行 HTML 注释里的标记字面量也不生效；缩进代码块（4 空格）、列表/引用块内的围栏、HTML `<pre>`/`<code>` 块里的标记仍会被识别——不要在这些位置写标记示例，否则会静默抑制后续候选。没有激活区间时 `pre-scan-enable` 是 no-op。
+- 标记后可用 `: 原因` 写说明（如 `<!-- pre-scan-ignore: 规则示例 -->`）；被抑制的候选不会进入 JSON、summary、baseline 与 `--fail-on` 门禁。标记本身是 HTML 注释，读者不可见。
+
 存量仓库可用 baseline 做「只拦新增」的棘轮（ratchet）：
 
 - `--write-baseline <file>`：把当前候选写成基线，字段为 `{tool, schema_version, entries:[{file, kind, evidence}]}`，按 file/kind/evidence 排序，输出稳定可 diff；不能与 `--fail-on`/`--baseline` 同用，退出码 0。
@@ -223,7 +236,7 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 
 自测：`node scripts/pre-scan.test.mjs`（CI 会跑）。
 
-注意：规则文档会引用候选词表本身（如本 skill 的 SKILL.md 写了「目前/最近/TODO」），因此对本仓库运行会得到一批预期内的候选噪音；这类命中应 triage 为 no action，不影响扫描器价值。
+注意：规则文档会引用候选词表本身（如本 skill 的 SKILL.md 写了「目前/最近/TODO」），因此对本仓库运行会得到一批预期内的候选噪音；这类命中应 triage 为 no action。如果希望彻底静音，可用上面的行内抑制标记，或 baseline 只拦新增。
 
 2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。1.7.0 修正锚点与大小写、1.8.0 补齐图片/引用式定义/空目标规则后按同一快照复跑，结果仍为 docproof 0、zhlint 30（无新增候选）。
 

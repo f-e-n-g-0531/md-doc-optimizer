@@ -189,6 +189,37 @@ function runAssertions(tmp) {
     '# Backslash Links\n\n[win link](sub\\file.md)\n\n![win image](img\\present.png)\n\n' +
     '[escaped underscore](./my\\_file.md)\n');
   addFile('docs/my_file.md', '# My File\n\nTarget for the escaped-underscore link.\n');
+  addFile('docs/suppression.md', [
+    '# Suppression', '',
+    '<!-- pre-scan-disable -->', '',
+    'TODO: 计划中的内容，暂不报。', '',
+    '[broken during disable](./nope.md)', '',
+    '<!-- pre-scan-enable -->', '',
+    'Visible TODO: 这行应该报。', '',
+    '[visible broken](./nope.md)', '',
+    '<!-- pre-scan-ignore --> TODO: 同行忽略。 [ignored link](./nope.md)', '',
+    '<!-- pre-scan-ignore-next-line -->',
+    'TODO: 下一行忽略。', '',
+    '[after](./nope.md)', '',
+  ].join('\n'));
+  addFile('docs/suppression-code.md', [
+    '# Suppression Code', '',
+    '```md',
+    '<!-- pre-scan-disable -->',
+    '```', '',
+    'TODO: reported.', '',
+    '`<!-- pre-scan-ignore -->` TODO: reported too.', '',
+  ].join('\n'));
+  addFile('docs/suppression-open.md',
+    '# Suppression Open\n\n<!-- pre-scan-disable -->\n\nTODO: hidden.\n\n[hidden](./nope.md)\n');
+  addFile('docs/suppression-enable.md',
+    '# Enable Alone\n\n[before](./nope1.md) <!-- pre-scan-enable -->\n\n[after](./nope2.md)\n');
+  addFile('docs/suppression-reason.md',
+    '# Reason\n\n<!-- pre-scan-ignore: 这是规则示例 --> TODO: hidden.\n\n' +
+    '<!-- pre-scan-disable: 规则说明 -->\nTODO: hidden in region.\n<!-- pre-scan-enable: 结束 -->\n');
+  addFile('docs/suppression-outer-comment.md',
+    '# Outer Comment\n\n<!--\nThe form is <!-- pre-scan-disable --> as shown\n-->\n\n' +
+    '[visible](./nope.md)\n');
   mkdirSync(join(tmp, 'docs', 'img'), { recursive: true });
   writeFileSync(join(tmp, 'docs', 'img', 'present.png'), 'png');
   addFile('clean/ok.md', '# OK\n\n[ok](#ok)\n');
@@ -397,6 +428,30 @@ function runAssertions(tmp) {
   ok(refDefs[3].evidence.includes('line 11'), 'duplicate definition evidence points at the first definition');
 
   eq(ofFile('docs/footnote.md'), [], 'footnote definitions and references are not treated as links');
+
+  const suppression = ofFile('docs/suppression.md');
+  eq(suppression.map((c) => c.kind), ['placeholder-marker', 'broken-local-link', 'broken-local-link'],
+    'suppression markers hide disabled/ignored lines only');
+  eq(suppression.map((c) => c.line), [11, 13, 20], 'only unsuppressed lines are reported');
+
+  const suppressionCode = ofFile('docs/suppression-code.md');
+  eq(suppressionCode.map((c) => c.kind), ['placeholder-marker', 'placeholder-marker'],
+    'markers inside fenced/inline code do not suppress');
+  eq(suppressionCode.map((c) => c.line), [7, 9], 'code-context marker lines');
+
+  eq(ofFile('docs/suppression-open.md'), [], 'unclosed pre-scan-disable suppresses through end of file');
+
+  const suppressionEnable = ofFile('docs/suppression-enable.md');
+  eq(suppressionEnable.map((c) => c.kind), ['broken-local-link', 'broken-local-link'],
+    'standalone pre-scan-enable is a no-op');
+  eq(suppressionEnable.map((c) => c.line), [3, 5], 'links on both sides of a standalone enable are reported');
+
+  eq(ofFile('docs/suppression-reason.md'), [], 'markers accept a ": reason" suffix');
+
+  const suppressionOuter = ofFile('docs/suppression-outer-comment.md');
+  eq(suppressionOuter.map((c) => c.kind), ['broken-local-link'],
+    'marker literal inside another HTML comment does not take effect');
+  eq(suppressionOuter[0].line, 7, 'visible link after the outer comment is reported');
 
   const comments = ofFile('docs/comments.md');
   eq(comments.map((c) => c.kind), ['broken-anchor'],

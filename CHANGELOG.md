@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.11.0 (2026-10-18)
+
+- 预扫新增行内抑制标记（HTML 注释，不渲染）：`<!-- pre-scan-ignore -->` 抑制同行、`<!-- pre-scan-ignore-next-line -->` 抑制下一行、`<!-- pre-scan-disable -->`/`<!-- pre-scan-enable -->` 抑制区间（未闭合时抑制到文件末尾）；标记后可写 `: 原因`。
+- 标记只影响候选上报，不影响标题/链接/锚点解析；顶层围栏/单行行内代码/外层多行 HTML 注释里的标记字面量不生效，缩进代码块、列表/引用块围栏与 HTML `<pre>` 内的标记仍生效（不要在这些位置写标记示例）；无激活区间时 `pre-scan-enable` 是 no-op；被抑制的候选不进入 JSON、summary、baseline 与 `--fail-on` 门禁。
+- 自测断言从 785 增至 883，覆盖区间开闭、同行/下一行、`: 原因`、enable no-op、外层注释内标记不生效、围栏与行内代码标记不生效、未闭合 disable。
+- 同步更新 references/tool-configs.md（标记语法与语义）、README、SKILL.md 工具表；版本号升至 1.11.0。
+
 ## 1.10.0 (2026-10-18)
 
 - 预扫新增 baseline 棘轮：`--write-baseline <file>` 把当前候选写成基线（tool/schema_version/entries，按 file/kind/evidence 排序、输出确定）；`--baseline <file>` 配合 `--fail-on` 只对新候选失败，已在基线中的候选在 stderr 说明忽略数量。
