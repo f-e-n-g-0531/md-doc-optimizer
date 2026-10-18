@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.0 (2026-10-18)
+
+- 修复脚注误报：`[^1]: ...` 等脚注定义不再被当作本地链接目标检查（此前会把脚注正文首词当路径，报 broken-local-link）；脚注正文里的引用式链接仍会检查。
+- 链接/引用扫描跳过 HTML 注释：单行与跨行注释里的链接、引用定义、显式锚点与标题都不再计入；注释里的围栏标记也不会再吞掉注释之后的正文。
+- 新增本地图片检查（`broken-local-image`）：内联 `![](...)`、图片形式的引用定义、快捷图片 `![alt]`、`[![alt](img)](link)` 嵌套写法，以及链接文字/alt 内嵌一层方括号（`![alt [x]](img)`、`[see [inner][label]](url)`）都核对存在性，路径大小写一并检查。
+- 新增空目标检查（`empty-link-target`）：`[]()`、`[]( "title")`、`[](<> "title")` 以及空定义 `[label]:`；同一行多个空目标分别报告。按 CommonMark，`]("title")` 的引号属于 destination，按普通链接核对。
+- 新增引用式链接完整性检查：`undefined-reference-label`（引用不存在的定义）、`unused-reference-definition`（定义从未被引用）、`duplicate-reference-definition`（同一标签重复定义）。支持完整/折叠/快捷形式，标签按 CommonMark 规则归一；支持目标换行与 blockquote/列表项内的定义。undefined 检查覆盖完整/折叠形式，快捷形式只用于判定定义是否被引用。
+- 新增跨平台路径检查：反斜杠分隔符（含编码后的 `%5C`）按 GitHub 行为报 broken-local-link/image，避免「Windows 本地能开、线上 404」的漏报；CommonMark 标点转义（如 `my\_file.md`）先解转义，不误报。
+- 自测断言从 324 增至 708，覆盖脚注、HTML 注释、图片（内联/引用式/快捷/嵌套/大小写）、空目标、引用定义各形式（含容器与换行）、链接文字内嵌方括号、转义方括号、反斜杠路径等，并保持输出确定性。
+- 同步更新 references/tool-configs.md（候选类型表、引用/图片规则）、SKILL.md 目标信号与 P2、audit-checklist、README；SKILL.md 版本号升至 1.8.0。
+
 ## 1.7.0 (2026-10-18)
 
 - 预扫锚点识别对齐 GitHub 实际规则：保留下划线、重复标题按出现顺序追加 `-1`/`-2`、标题内 HTML 标签按渲染文本处理、HTML 实体先解码。修复 `#foo_bar`、`#notes-1`、含 `<code>` 的标题、显式 HTML 锚点等多处误报。

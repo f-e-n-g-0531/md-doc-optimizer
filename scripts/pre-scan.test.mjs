@@ -12,8 +12,13 @@ const scriptPath = join(dirname(fileURLToPath(import.meta.url)), 'pre-scan.mjs')
 
 const ALLOWED_KINDS = [
   'broken-local-link',
+  'broken-local-image',
   'case-mismatch-link',
   'broken-anchor',
+  'empty-link-target',
+  'undefined-reference-label',
+  'unused-reference-definition',
+  'duplicate-reference-definition',
   'default-branch-master-link',
   'trailing-fullwidth-after-url',
   'stale-time-phrase',
@@ -25,8 +30,13 @@ const ALLOWED_KINDS = [
 ];
 const CATEGORY_OF = {
   'broken-local-link': 'B',
+  'broken-local-image': 'B',
   'case-mismatch-link': 'B',
   'broken-anchor': 'B',
+  'empty-link-target': 'B',
+  'undefined-reference-label': 'B',
+  'unused-reference-definition': 'A',
+  'duplicate-reference-definition': 'A',
   'default-branch-master-link': 'B',
   'trailing-fullwidth-after-url': 'C',
   'stale-time-phrase': 'B',
@@ -105,6 +115,82 @@ function runAssertions(tmp) {
     '# Case Link\n\n[wrong file case](./Case-Target.md)\n\n[right case](./case-target.md)\n\n' +
     '[wrong dir case](sub/File.md)\n');
   addFile('docs/sub/file.md', '# Sub File\n\nLinked with a wrong-case path.\n');
+  addFile('docs/images.md',
+    '# Images\n\n' +
+    '![missing](./img/missing.png)\n\n' +
+    '![present](./img/present.png)\n\n' +
+    '![case](./img/Present.png)\n\n' +
+    '![external](https://example.com/x.png)\n\n' +
+    '![data](data:image/png;base64,AAAA)\n\n' +
+    '![ref missing][img-ref]\n\n' +
+    '![ref present][img-ok]\n\n' +
+    '[img-ref]: ./img/missing.png\n' +
+    '[img-ok]: ./img/present.png\n');
+  addFile('docs/empty-targets.md',
+    '# Empty\n\n[empty]()\n\n[empty title]( "title")\n\n[empty angle](<>)\n\n' +
+    '[angle title](<> "title")\n\n![empty image]()\n\n[same one]() and [same two]()\n\n' +
+    '[empty-ref]:\n\n[valid](#empty)\n');
+  addFile('docs/ref-defs.md',
+    '# Ref Defs\n\n' +
+    'Use [good][a], [collapsed][], shortcut [c], [dup][dup], [missing][], and [anchored][].\n\n' +
+    '![image][d]\n\n' +
+    '[good-link]: ./valid.md\n' +
+    '[collapsed]: ./valid.md\n' +
+    '[c]: ./valid.md\n' +
+    '[unused]: ./valid.md\n' +
+    '[dup]: ./valid.md\n' +
+    '[dup]: ./valid.md\n' +
+    '[missing]: ./nope.md\n' +
+    '[anchored]: ./anchors-target.md#no-such-heading\n' +
+    '[a]: ./valid.md\n');
+  addFile('docs/footnote.md',
+    '# Footnotes\n\nText with a footnote[^1] and another[^note].\n\n' +
+    '[^1]: First footnote body.\n\n[^note]: Named footnote body.\n\n' +
+    '## Footnote Heading\n\nAnother reference[^1].\n');
+  addFile('docs/comments.md',
+    '# Comments\n\n' +
+    '<!-- [old](./missing.md) and [fake][nodef] -->\n\n' +
+    'Visible [ok](./valid.md).\n\n' +
+    '<a name="real"></a>\n\n' +
+    '<!-- <a name="ghost"></a> -->\n\n' +
+    '[real anchor](#real) and [ghost anchor](#ghost)\n\n' +
+    '<!-- multi-line comment starts\n[broken](./nope.md)\n-->\n');
+  addFile('docs/image-shortcut.md',
+    '# Image Shortcut\n\n![shot present]\n\n![shot missing]\n\n' +
+    '[shot present]: ./img/present.png\n[shot missing]: ./img/absent.png\n');
+  addFile('docs/nested-image-link.md',
+    '# Nested Image Link\n\n' +
+    '[![alt missing](./img/absent.png)](./valid.md)\n\n' +
+    '[![alt present](./img/present.png)](./outer-missing.md)\n\n' +
+    '[![alt present](./img/present.png)](./valid.md)\n');
+  addFile('docs/nested-brackets.md',
+    '# Nested Brackets\n\n' +
+    '![alt [x]](./img/absent.png)\n\n' +
+    '[see [inner][nodef]](./outer-missing.md)\n\n' +
+    '[see [inner][nodef]](./valid.md)\n');
+  addFile('docs/multiline-defs.md',
+    '# Multiline Defs\n\n[multi]:\n  ./valid.md\n\n' +
+    '> [quoted-def]: ./valid.md\n\n- [list-def]: ./valid.md\n\n' +
+    'Use [multi][], [quoted-def][], and [list-def][].\n');
+  addFile('docs/footnote-body.md',
+    '# Footnote Body\n\n[^named]: Body [bad ref][nodef2] and a footnote ref[^x].\n\n' +
+    'Next [also bad][nodef3].\n\n[^x]: Another footnote.\n');
+  addFile('docs/quoted-target.md',
+    '# Quoted Target\n\n[quoted]("missing.md")\n\n[quoted-ref]: "missing.md"\n\n' +
+    'Use [quoted-ref][].\n');
+  addFile('docs/escaped-brackets.md',
+    '# Escaped\n\nLiteral \\[text](./missing.md) and \\[x]() and \\[y](<>).\n');
+  addFile('docs/commented-headings.md',
+    '# Commented Headings\n\n<!--\n# Ghost Title\n\n## Hidden Notes\n-->\n\n' +
+    '## Visible Notes\n\n[ghost](#ghost-title)\n\n[hidden](#hidden-notes)\n');
+  addFile('docs/comment-fence.md',
+    '# Comment Fence\n\n<!--\n```md\n-->\n\n[after](./missing-after.md)\n');
+  addFile('docs/backslash-links.md',
+    '# Backslash Links\n\n[win link](sub\\file.md)\n\n![win image](img\\present.png)\n\n' +
+    '[escaped underscore](./my\\_file.md)\n');
+  addFile('docs/my_file.md', '# My File\n\nTarget for the escaped-underscore link.\n');
+  mkdirSync(join(tmp, 'docs', 'img'), { recursive: true });
+  writeFileSync(join(tmp, 'docs', 'img', 'present.png'), 'png');
   addFile('docs/master.md',
     '# Master Branch\n\n[tree link](https://github.com/some-owner/some-repo/tree/master/docs)\n');
   addFile('docs/fullwidth.md',
@@ -239,6 +325,81 @@ function runAssertions(tmp) {
   eq(anchorDup.map((c) => c.kind), ['duplicate-heading', 'broken-anchor'],
     'duplicate headings get -1 suffix; only the nonexistent -2 anchor is reported');
   eq(anchorDup.map((c) => c.line), [7, 15], 'duplicate heading and anchor lines');
+
+  const images = ofFile('docs/images.md');
+  eq(images.map((c) => c.kind),
+    ['broken-local-image', 'case-mismatch-link', 'broken-local-image'],
+    'inline image, image path case, and image-only reference target are all checked');
+  eq(images.map((c) => c.line), [3, 7, 17], 'image candidate lines');
+  ok(images[0].evidence.includes('relative image target not found: ./img/missing.png'), 'broken image evidence');
+  ok(images[1].evidence.includes('image path case differs'), 'image case-mismatch evidence mentions image');
+  ok(images[2].evidence.includes('./img/missing.png'), 'reference image target checked at its definition line');
+
+  const imageShortcut = ofFile('docs/image-shortcut.md');
+  eq(imageShortcut.map((c) => c.kind), ['broken-local-image'],
+    'shortcut image usage counts; its definition target is checked as an image');
+  eq(imageShortcut[0].line, 8, 'shortcut image definition line');
+
+  const nested = ofFile('docs/nested-image-link.md');
+  eq(nested.map((c) => c.kind), ['broken-local-image', 'broken-local-link'],
+    'nested image-link checks both the image and the outer link');
+  eq(nested.map((c) => c.line), [3, 5], 'nested image-link lines');
+
+  const nestedBrackets = ofFile('docs/nested-brackets.md');
+  eq(nestedBrackets.map((c) => c.kind), ['broken-local-image', 'broken-local-link'],
+    'link text with one level of nested brackets is parsed (image alt and reference-like text)');
+  eq(nestedBrackets.map((c) => c.line), [3, 5], 'nested bracket lines');
+
+  eq(ofFile('docs/multiline-defs.md'), [], 'multiline and container reference definitions are resolved');
+  eq(ofFile('docs/escaped-brackets.md'), [], 'escaped brackets are not treated as links');
+
+  const footnoteBody = ofFile('docs/footnote-body.md');
+  eq(footnoteBody.map((c) => c.kind), ['undefined-reference-label', 'undefined-reference-label'],
+    'references in a footnote definition body are still checked');
+  eq(footnoteBody.map((c) => c.line), [3, 5], 'footnote body usage lines');
+
+  const quoted = ofFile('docs/quoted-target.md');
+  eq(quoted.map((c) => c.kind), ['broken-local-link', 'broken-local-link'],
+    'quoted destinations are links, not empty targets');
+  eq(quoted.map((c) => c.line), [3, 5], 'quoted destination lines');
+
+  const commentedHeadings = ofFile('docs/commented-headings.md');
+  eq(commentedHeadings.map((c) => c.kind), ['broken-anchor', 'broken-anchor'],
+    'headings inside HTML comments create neither anchors nor duplicate headings');
+  eq(commentedHeadings.map((c) => c.line), [11, 13], 'commented-heading anchor lines');
+
+  const commentFence = ofFile('docs/comment-fence.md');
+  eq(commentFence.map((c) => c.kind), ['broken-local-link'],
+    'fence markers inside comments do not swallow later text');
+  eq(commentFence[0].line, 7, 'comment fence case line');
+
+  const backslash = ofFile('docs/backslash-links.md');
+  eq(backslash.map((c) => c.kind), ['broken-local-link', 'broken-local-image'],
+    'backslash path separators are reported for links and images');
+  eq(backslash.map((c) => c.line), [3, 5], 'backslash path lines');
+  ok(backslash[0].evidence.includes('backslash'), 'backslash evidence');
+
+  const empties = ofFile('docs/empty-targets.md');
+  eq(empties.map((c) => c.kind),
+    ['empty-link-target', 'empty-link-target', 'empty-link-target', 'empty-link-target',
+      'empty-link-target', 'empty-link-target', 'empty-link-target', 'empty-link-target'],
+    'empty inline link/image targets (angle+title, same line) and empty definitions detected');
+  eq(empties.map((c) => c.line), [3, 5, 7, 9, 11, 13, 13, 15], 'empty target lines');
+
+  const refDefs = ofFile('docs/ref-defs.md');
+  eq(refDefs.map((c) => c.kind),
+    ['undefined-reference-label', 'unused-reference-definition', 'unused-reference-definition',
+      'duplicate-reference-definition', 'broken-local-link', 'broken-anchor'],
+    'reference definitions checked for undefined use, unused/duplicate, broken target and anchor');
+  eq(refDefs.map((c) => c.line), [5, 7, 10, 12, 13, 14], 'reference definition candidate lines');
+  ok(refDefs[3].evidence.includes('line 11'), 'duplicate definition evidence points at the first definition');
+
+  eq(ofFile('docs/footnote.md'), [], 'footnote definitions and references are not treated as links');
+
+  const comments = ofFile('docs/comments.md');
+  eq(comments.map((c) => c.kind), ['broken-anchor'],
+    'links/references in HTML comments are ignored; a commented-out anchor does not count');
+  eq(comments[0].line, 11, 'only the visible broken anchor is reported');
 
   const caseLinks = ofFile('docs/case-link.md');
   eq(caseLinks.map((c) => c.kind), ['case-mismatch-link', 'case-mismatch-link'],

@@ -177,9 +177,12 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 
 | kind | 类别 | 说明 |
 |---|---|---|
-| broken-local-link | B | 相对路径链接指向不存在的文件（图片链接暂不检查） |
+| broken-local-link | B | 相对路径链接指向不存在的文件 |
+| broken-local-image | B | 相对路径图片（`![](...)`）指向不存在的文件 |
 | case-mismatch-link | B | 路径大小写与磁盘真实文件名不一致：Windows/macOS 本地能打开，Linux/CI 上 404 |
 | broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在（按 GitHub 锚点规则计算） |
+| empty-link-target | B | 空链接/图片目标：`[]()`、`[]( "title")`、`[](<> "title")`、空定义 `[label]:` |
+| undefined-reference-label | B | 完整/折叠引用 `[text][label]`/`[label][]` 的 label 在本文件没有定义，会渲染成字面文本 |
 | default-branch-master-link | B | GitHub 链接硬编码 `/tree/master/` 或 `/blob/master/`，需核对默认分支 |
 | trailing-fullwidth-after-url | C | URL 后粘连全角括号/引号，常导致 404 |
 | stale-time-phrase | B | currently / recently / soon / 目前 / 最近 等时间敏感词 |
@@ -187,6 +190,8 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 | duplicate-heading | A | 同文件内同层级同名标题 |
 | duplicate-paragraph | A | 同文件内重复段落 |
 | multiple-h1 | A | 一个文件多个一级标题 |
+| unused-reference-definition | A | 引用定义 `[label]: url` 从未被引用 |
+| duplicate-reference-definition | A | 同一引用标签重复定义，后一条会被忽略 |
 | near-duplicate-files | A | 两个文件行集合高度相似，疑似拷贝或生成副本 |
 
 输出结构：`{tool, schema_version, target, files_scanned, candidates[], summary{total, by_kind, by_category}}`；candidates 按 file/line/kind 排序，便于 diff。
@@ -195,6 +200,11 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 
 - **锚点**：保留下划线与连字符；重复标题按出现顺序追加 `-1`、`-2`；标题里的 HTML 标签按渲染文本处理、实体先解码；`<a name="x">`、`<span id="x">` 等显式 HTML 锚点同样算合法目标。
 - **大小写**：不依赖本机文件系统是否区分大小写，而是逐段 `readdir` 比对真实文件名，因此 Windows 开发机与 Linux CI 上的结论一致。
+- **引用式链接**：支持完整 `[text][label]`、折叠 `[label][]` 与快捷 `[label]`（含快捷图片 `![alt]`）；定义可位于行首、blockquote 或列表项内，目标可换行；脚注 `[^1]: ...` 不是链接定义、不参与检查，但脚注正文里的引用仍会扫描。
+- **图片**：只检查本地相对路径（含图片形式的引用定义、`[![alt](img)](link)` 嵌套写法，以及 alt 内嵌一层方括号）；外部 URL 交给 lychee 等链接检查器。
+- **HTML 注释**：注释里的链接、引用定义、标题与显式锚点都不参与检查；注释里的围栏标记也不能吞掉注释后的正文。
+- **路径分隔符**：链接里的反斜杠（含编码后的 `%5C`）按 GitHub 行为报失效——线上会变成 `%5C` 404，即使 Windows 本地能打开；统一用 `/`。CommonMark 的标点转义（如 `my\_file.md`）先解转义，不算分隔符。
+- **空目标**：`[]()`、`[]( "title")`、`[](<> "title")` 报空目标；按 CommonMark，`]("title")` 的引号属于 destination，按普通链接核对；`[label]:`（无目标）属启发式候选（CommonMark 会按普通段落渲染），需人工确认。
 
 `near-duplicate-files` 为两两文件比较（O(n²)）：数千个 Markdown 的大仓库会偏慢，可先对 docs/ 等子目录分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
 
@@ -202,7 +212,7 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 
 注意：规则文档会引用候选词表本身（如本 skill 的 SKILL.md 写了「目前/最近/TODO」），因此对本仓库运行会得到一批预期内的候选噪音；这类命中应 triage 为 no action，不影响扫描器价值。
 
-2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。1.7.0 修正锚点与大小写规则后按同一快照复跑，结果不变（docproof 0；zhlint 30，无新增候选）。
+2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。1.7.0 修正锚点与大小写、1.8.0 补齐图片/引用式定义/空目标规则后按同一快照复跑，结果仍为 docproof 0、zhlint 30（无新增候选）。
 
 ## GitHub Actions —— 组合检查（自包含版）
 

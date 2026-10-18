@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.7.0"
+  version: "1.8.0"
 ---
 
 # Markdown 文档优化器
@@ -60,6 +60,7 @@ metadata:
 - 同义段落/说明在文档内多处重复；多篇文档互相拷贝同样内容（README 与 docs 重复）。
 - 重复标题（同层级同名，对应 markdownlint MD024）。
 - 同一链接多次出现且无必要（合并或集中到一处/页脚）。
+- 未使用的引用定义（`[label]: url`）或重复定义的引用标签。
 - 口水词、套话、无信息量修饰（「非常简单」「只需轻松几步」「众所周知」）。
 - 冗余限定：「可能」「大概」「基本上」叠加；重复加粗+斜体；同一语义的长短两版并存。
 
@@ -70,6 +71,7 @@ metadata:
 信号：
 - 时间敏感表述已过期：「目前/最近/近期」「将于 X 上线」「过去三年」「自 2023 年起」，需按当前日期核对。
 - 指向不存在的文件/目录/脚本/工作流/命令/flag/env；链接 404 或跳到无关页。
+- 本地图片失效、空链接目标（`[]()`）、引用标签未定义（`[text][label]` 渲染成字面文本）。
 - 引用的版本、依赖、API 端点、配置键已改名或删除。
 - TODO/FIXME/占位残留：「待补充」「coming soon」「TBD」且早已发布。
 - 描述的行为与当前工具/代码实际输出不一致（示例命令跑不通）。
@@ -103,7 +105,7 @@ metadata:
 - 逐条解析链接并探测（lychee / markdown-link-check / 直接请求）。
 - 实际运行命令/示例（能跑则跑；跑不了的记录 run-failed 作为证据）。
 - 核对版本与日期（package.json / requirements / CHANGELOG / 发布记录）。
-- 先跑内置预扫脚本生成候选清单：`node scripts/pre-scan.mjs <目标目录>`（本地死链/锚点、跨平台大小写路径、疑似默认分支链接、时间敏感词、重复标题/段落、疑似生成副本等）；输出是候选，不是结论。
+- 先跑内置预扫脚本生成候选清单：`node scripts/pre-scan.mjs <目标目录>`（本地死链/锚点、失效图片、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、疑似默认分支链接、时间敏感词、占位标记、重复标题/段落、疑似生成副本等）；输出是候选，不是结论。
 - 再用 markdownlint、Vale、mdoctest 补充结构/文风/示例候选；所有预扫输出都当作「待核对清单」，不作为最终结论。
 
 ### P3 逐条核对与分级
@@ -158,7 +160,7 @@ metadata:
 
 | 目标 | 工具 | 作用 |
 |---|---|---|
-| 候选预扫 | scripts/pre-scan.mjs | 本地死链/锚点、跨平台大小写路径、硬编码 master 链接、时间词、重复标题/段落、疑似生成副本；只报候选 |
+| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、疑似生成副本；只报候选 |
 | 结构去重 | markdownlint / remark-lint | MD024 重复标题、MD025 多 H1、未使用定义等 |
 | 文风/冗余 | Vale + write-good/proselint/alex | 口水词、被动语态、客套、歧视用语 |
 | 链接失效 | lychee、markdown-link-check | 找 404/死链/锚点失效 |

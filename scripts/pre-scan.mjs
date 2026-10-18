@@ -13,16 +13,28 @@ const FULLWIDTH_CHARS = new Set(['）', '】', '」', '》']);
 
 // 每个候选 kind 固定归入 A（冗余）/ B（过期失效）/ C（事实不符）三类
 const CATEGORY = {
-  'broken-local-link': 'B', 'case-mismatch-link': 'B', 'broken-anchor': 'B', 'default-branch-master-link': 'B',
+  'broken-local-link': 'B', 'broken-local-image': 'B', 'case-mismatch-link': 'B', 'broken-anchor': 'B',
+  'default-branch-master-link': 'B', 'empty-link-target': 'B', 'undefined-reference-label': 'B',
   'trailing-fullwidth-after-url': 'C', 'stale-time-phrase': 'B', 'placeholder-marker': 'B',
   'duplicate-heading': 'A', 'duplicate-paragraph': 'A', 'multiple-h1': 'A', 'near-duplicate-files': 'A',
+  'unused-reference-definition': 'A', 'duplicate-reference-definition': 'A',
 };
 
 // 长短语在前，命中区间重叠时只保留第一个（避免 coming soon 再报一次 soon）
 const STALE_RE = /by the end of \d{4}|\bin the near future\b|\bcoming soon\b|\bnext quarter\b|\bcurrently\b|\brecently\b|\bthis year\b|\bsoon\b|目前|最近|近期|即将|不久后/gi;
 const PLACEHOLDER_RE = /\bTODO\b|\bFIXME\b|\bTBD\b|待补充|待完善|\bcoming soon\b|\bstay tuned\b/gi;
-const LINK_RE = /(!?)\[([^\]\n]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
-const REF_DEF_RE = /^\s{0,3}\[([^\]]+)\]:\s*(\S+)/;
+// 链接文字允许一层嵌套方括号：![alt [x]](img)、[see [inner][label]](url)
+const LINK_RE = /(!?)\[((?:[^\[\]\n]|\[[^\[\]\n]*\])*)\]\((\s*)<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+// 图片作为链接文字（常见徽章写法）：[![alt](img)](link)
+const NESTED_IMAGE_LINK_RE = /\[(!\[[^\]\n]*\]\([^)\n]*\))\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+// 引用式定义：可位于 blockquote / 列表项内；脚注 [^1]: ... 也会被匹配，解析时再排除
+const REF_DEF_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*\[([^\]]+)\]:\s*(.*)$/;
+// 引用式使用：完整 [text][label]、折叠 [label][]、快捷 [label]；快捷形式歧义大，只用于「定义是否被使用」
+const REF_USAGE_RE = /(!?)\[([^\]]*)\](?:\[([^\]]*)\])?/g;
+// 空目标：[]()、[]( "title")、[](<>) 等；]("title") 的引号是 destination 的一部分，不算空
+const EMPTY_TARGET_RE = /(!?)\[[^\]]*\]\(\s*(?:\)|<>\s*(?:"[^"]*"|'[^']*')?\s*\)|\s+(?:"[^"]*"|'[^']*')\s*\))/g;
+const ESCAPED_BRACKET_RE = /\\([\[\]])/g;
+const ESCAPED_OPEN_BRACKET_RE = /\\\[/g;
 const MASTER_RE = /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:tree|blob)\/master(?=[/?#)\s]|$)/gi;
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g;
 const FENCE_OPEN_RE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
@@ -82,6 +94,11 @@ function maskUrls(text) {
   return text.replace(BARE_URL_RE, (match) => ' '.repeat(match.length));
 }
 
+// 引用标签归一：内部空白折叠、大小写不敏感（CommonMark 引用标签规则）
+function normalizeLabel(label) {
+  return String(label || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 // GitHub-ish 锚点：小写；保留字母/数字/下划线/连字符（GitHub 保留 _）；空格逐个转连字符
 function slugify(text) {
   return text.toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '').replace(/ /g, '-');
@@ -130,8 +147,10 @@ function analyzeFile(absPath, targetAbs) {
     }
   }
 
-  // 围栏代码块：3+ 反引号或 3+ 波浪线开关，围栏内容整体忽略
+  // 围栏代码块：3+ 反引号或 3+ 波浪线开关，围栏内容整体忽略。
+  // 同时跟踪 HTML 注释：注释里的围栏标记不算围栏，避免把注释之后的正文一起吞掉。
   let fence = null;
+  let fenceCommentOpen = false;
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
     const line = lines[i];
@@ -141,18 +160,73 @@ function analyzeFile(absPath, targetAbs) {
       if (close && close[1][0] === fence.char && close[1].length >= fence.len) fence = null;
       continue;
     }
+    if (fenceCommentOpen) {
+      if (maskInlineCode(line).includes('-->')) fenceCommentOpen = false;
+      continue; // 注释内容不是 Markdown，不参与围栏判断
+    }
     const open = line.match(FENCE_OPEN_RE);
-    if (!open) continue;
-    if (open[1][0] === '`' && open[2].includes('`')) continue;
-    fence = { char: open[1][0], len: open[1].length };
-    ignored[i] = true;
+    if (open) {
+      if (!(open[1][0] === '`' && open[2].includes('`'))) {
+        fence = { char: open[1][0], len: open[1].length };
+        ignored[i] = true;
+      }
+      continue;
+    }
+    // 非围栏行：检查是否开启 HTML 注释（行内代码里的 <!-- 不算）
+    const maskedLine = maskInlineCode(line);
+    let searchFrom = 0;
+    for (;;) {
+      const start = maskedLine.indexOf('<!--', searchFrom);
+      if (start < 0) break;
+      const end = maskedLine.indexOf('-->', start + 4);
+      if (end < 0) {
+        fenceCommentOpen = true;
+        break;
+      }
+      searchFrom = end + 3;
+    }
+  }
+
+  // 链接扫描用文本：先遮行内代码，再遮 HTML 注释，并遮掉转义的开方括号。
+  // 注释里的链接/引用/锚点不算正文；跨行注释整行遮掉，注释后的正文仍保留。
+  // commentMasked 只遮注释、保留行内代码原文，供标题解析（标题里的代码要保留文本）。
+  const linkMasked = new Array(lines.length).fill('');
+  const commentMasked = new Array(lines.length).fill('');
+  let commentOpen = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (ignored[i]) continue;
+    let masked = maskInlineCode(lines[i]);
+    let rawMasked = lines[i];
+    if (commentOpen) {
+      const closeAt = masked.indexOf('-->');
+      if (closeAt < 0) continue;
+      masked = ' '.repeat(closeAt + 3) + masked.slice(closeAt + 3);
+      rawMasked = ' '.repeat(closeAt + 3) + rawMasked.slice(closeAt + 3);
+      commentOpen = false;
+    }
+    for (;;) {
+      const openAt = masked.indexOf('<!--');
+      if (openAt < 0) break;
+      const closeAt = masked.indexOf('-->', openAt + 4);
+      if (closeAt < 0) {
+        masked = masked.slice(0, openAt);
+        rawMasked = rawMasked.slice(0, openAt);
+        commentOpen = true;
+        break;
+      }
+      const blank = ' '.repeat(closeAt + 3 - openAt);
+      masked = masked.slice(0, openAt) + blank + masked.slice(closeAt + 3);
+      rawMasked = rawMasked.slice(0, openAt) + blank + rawMasked.slice(closeAt + 3);
+    }
+    commentMasked[i] = rawMasked;
+    linkMasked[i] = masked.replace(ESCAPED_OPEN_BRACKET_RE, '  ');
   }
 
   // ATX 标题（# 到 ######）；slug 统一生成，复现 GitHub 对重复标题追加 -1/-2 的规则
   const headings = [];
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
-    const m = lines[i].match(/^(#{1,6})[ \t]+(.+?)\s*$/);
+    const m = commentMasked[i].match(/^(#{1,6})[ \t]+(.+?)\s*$/);
     if (!m) continue;
     const text = m[2].replace(/[ \t]+#+\s*$/, '').trim();
     if (text) headings.push({ line: i + 1, level: m[1].length, text: text });
@@ -171,9 +245,58 @@ function analyzeFile(absPath, targetAbs) {
   const explicitAnchors = new Set();
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
-    for (const m of maskInlineCode(lines[i]).matchAll(HTML_ANCHOR_RE)) {
+    for (const m of linkMasked[i].matchAll(HTML_ANCHOR_RE)) {
       const anchor = String(m[1] !== undefined ? m[1] : m[2] || '').trim();
       if (anchor) explicitAnchors.add(anchor);
+    }
+  }
+
+  // 引用式链接：定义 [label]: target 与使用 [text][label] / [label][] / [label]
+  // 脚注 [^label]: ... 不是链接定义，先排除，避免把脚注正文当成本地路径
+  const refDefinitions = [];
+  const labelUsage = new Map(); // 归一标签 -> { link, image }
+  const explicitUses = []; // 完整/折叠形式的使用，用于「引用了不存在的定义」
+  const addUsage = (label, isImage) => {
+    const normalized = normalizeLabel(label);
+    if (!normalized || normalized.startsWith('^')) return '';
+    const entry = labelUsage.get(normalized) || { link: false, image: false };
+    if (isImage) entry.image = true; else entry.link = true;
+    labelUsage.set(normalized, entry);
+    return normalized;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (ignored[i] || !linkMasked[i]) continue;
+    const masked = linkMasked[i];
+    const def = masked.match(REF_DEF_RE);
+    if (def && !def[1].startsWith('^')) {
+      const rest = def[2];
+      const dest = rest.match(/^(?:<([^>]*)>|(\S+))/);
+      let target = dest ? (dest[1] !== undefined ? dest[1] : dest[2]) : '';
+      if (!target) {
+        // 目标换行：下一行必须是孤立的 destination（可带 title）
+        const nextMasked = linkMasked[i + 1];
+        if (nextMasked) {
+          const nextDest = nextMasked.match(/^\s{0,3}(?:<([^>]*)>|(\S+))\s*(?:"[^"]*"|'[^']*')?\s*$/);
+          if (nextDest) target = nextDest[1] !== undefined ? nextDest[1] : nextDest[2];
+        }
+      }
+      refDefinitions.push({ line: i + 1, label: def[1], normalized: normalizeLabel(def[1]), target: target });
+      continue; // 定义行本身不算使用
+    }
+    // 脚注定义行不是链接定义，但其正文里可能还有引用式链接，继续向下扫描使用
+    // 先去掉行内链接/图片与转义方括号，避免误判成引用式使用
+    const usageText = masked
+      .replace(LINK_RE, (match) => ' '.repeat(match.length))
+      .replace(ESCAPED_BRACKET_RE, (match) => ' '.repeat(match.length));
+    for (const m of usageText.matchAll(REF_USAGE_RE)) {
+      const isImage = m[1] === '!';
+      if (m[3] !== undefined) {
+        const label = m[3] === '' ? m[2] : m[3];
+        const normalized = addUsage(label, isImage);
+        if (normalized) explicitUses.push({ line: i + 1, label: label, normalized: normalized });
+      } else if (m[2]) {
+        addUsage(m[2], isImage); // 快捷图片 ![alt] 也是合法引用（定义存在时）
+      }
     }
   }
 
@@ -194,6 +317,11 @@ function analyzeFile(absPath, targetAbs) {
     headings: headings,
     headingSlugs: headingSlugs,
     explicitAnchors: explicitAnchors,
+    linkMasked: linkMasked,
+    commentMasked: commentMasked,
+    refDefinitions: refDefinitions,
+    labelUsage: labelUsage,
+    explicitUses: explicitUses,
     nonEmptyLines: nonEmptyLines,
   };
 }
@@ -262,7 +390,8 @@ function detectLocal(doc, docsByAbs, add) {
     add(doc, lineNo, 'broken-anchor', 'anchor #' + rawAnchor + ' has no matching heading slug or explicit HTML anchor');
   };
 
-  const checkLink = (lineNo, rawTarget) => {
+  const checkLink = (lineNo, rawTarget, options) => {
+    const isImage = Boolean(options && options.image);
     let target = String(rawTarget || '').trim().replace(/^<|>$/g, '');
     if (!target || target === '#') return;
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) return; // http(s)/mailto/tel/data 等外部协议
@@ -281,31 +410,52 @@ function detectLocal(doc, docsByAbs, add) {
     } catch (err) {
       // 保留原值
     }
-    const absTarget = resolve(dirname(doc.absPath), decodedPath);
+    // CommonMark 允许用反斜杠转义 ASCII 标点（如 ./a\_b.md）；先解转义，剩下的反斜杠才是路径分隔符
+    const unescapedPath = decodedPath.replace(/\\([!-/:-@\[-\`{-~])/g, '$1');
+    if (unescapedPath.includes('\\')) {
+      // GitHub/Linux 不把 \ 当目录分隔符：本地 Windows 能打开，线上是 %5C 404
+      add(doc, lineNo, isImage ? 'broken-local-image' : 'broken-local-link',
+        'path uses backslash separators; use "/" instead (GitHub resolves "\\" as %5C)');
+      return;
+    }
+    const absTarget = resolve(dirname(doc.absPath), unescapedPath);
     const onDisk = resolveOnDisk(absTarget);
     if (!onDisk.exists) {
-      add(doc, lineNo, 'broken-local-link', 'relative link target not found: ' + pathPart);
+      add(doc, lineNo, isImage ? 'broken-local-image' : 'broken-local-link',
+        (isImage ? 'relative image' : 'relative link') + ' target not found: ' + pathPart);
       return;
     }
     if (onDisk.mismatch) {
       add(doc, lineNo, 'case-mismatch-link',
-        'path case differs from on-disk name: ' + onDisk.mismatch.linked + ' -> ' + onDisk.mismatch.disk +
+        (isImage ? 'image path' : 'path') + ' case differs from on-disk name: ' +
+        onDisk.mismatch.linked + ' -> ' + onDisk.mismatch.disk +
         ' (case-sensitive file systems will 404)');
     }
-    if (rawAnchor) checkAnchor(lineNo, onDisk.actualAbs, rawAnchor);
+    if (rawAnchor && !isImage) checkAnchor(lineNo, onDisk.actualAbs, rawAnchor);
   };
 
   // 1) 链接 / 锚点 / 硬编码 master 分支 / URL 后贴全角标点
   for (let i = 0; i < lines.length; i++) {
     if (doc.ignored[i]) continue;
     const lineNo = i + 1;
-    const masked = maskInlineCode(lines[i]);
-    for (const m of masked.matchAll(LINK_RE)) {
-      if (m[1] === '!' || m[2].startsWith('!')) continue; // 图片链接暂不检查
-      checkLink(lineNo, m[3]);
+    const masked = doc.linkMasked[i] || '';
+    // 先处理「图片作为链接文字」：[![alt](img)](url)，内外两层都要核对
+    let remaining = masked;
+    for (const nested of masked.matchAll(NESTED_IMAGE_LINK_RE)) {
+      const inner = nested[1].match(/^(!?)\[([^\]\n]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)$/);
+      if (inner) checkLink(lineNo, inner[3], { image: true });
+      checkLink(lineNo, nested[2], { image: false });
+      remaining = remaining.slice(0, nested.index) + ' '.repeat(nested[0].length) +
+        remaining.slice(nested.index + nested[0].length);
     }
-    const refDef = masked.match(REF_DEF_RE);
-    if (refDef) checkLink(lineNo, refDef[2]);
+    for (const m of remaining.matchAll(LINK_RE)) {
+      if (/^["']/.test(m[4]) && m[3].length > 0) continue; // 空目标 + 标题，交给 EMPTY_TARGET_RE
+      checkLink(lineNo, m[4], { image: m[1] === '!' });
+    }
+    for (const m of masked.matchAll(EMPTY_TARGET_RE)) {
+      add(doc, lineNo, 'empty-link-target',
+        (m[1] === '!' ? 'image' : 'link') + ' target is empty: ' + m[0].trim());
+    }
     for (const m of masked.matchAll(MASTER_RE)) {
       add(doc, lineNo, 'default-branch-master-link', 'hardcoded /master/ path; verify repository default branch');
       break;
@@ -322,6 +472,35 @@ function detectLocal(doc, docsByAbs, add) {
     }
     if (glued.size > 0) {
       add(doc, lineNo, 'trailing-fullwidth-after-url', 'full-width punctuation likely glued into URL');
+    }
+  }
+
+  // 1.1) 引用式定义：目标有效性 / 空目标 / 重复定义 / 未被引用；以及引用了不存在的定义
+  const definedLabels = new Set(doc.refDefinitions.map((def) => def.normalized).filter(Boolean));
+  const firstDefinitionLine = new Map();
+  for (const def of doc.refDefinitions) {
+    if (!def.normalized) continue;
+    const usage = doc.labelUsage.get(def.normalized);
+    const imageOnly = Boolean(usage && usage.image && !usage.link);
+    if (!def.target) {
+      add(doc, def.line, 'empty-link-target', 'reference definition [' + def.label + '] has an empty target');
+    } else {
+      checkLink(def.line, def.target, { image: imageOnly });
+    }
+    if (firstDefinitionLine.has(def.normalized)) {
+      add(doc, def.line, 'duplicate-reference-definition',
+        'definition [' + def.label + '] already defined at line ' + firstDefinitionLine.get(def.normalized));
+    } else {
+      firstDefinitionLine.set(def.normalized, def.line);
+    }
+    if (!usage && def.target) {
+      add(doc, def.line, 'unused-reference-definition', 'definition [' + def.label + '] is never referenced');
+    }
+  }
+  for (const use of doc.explicitUses) {
+    if (!definedLabels.has(use.normalized)) {
+      add(doc, use.line, 'undefined-reference-label',
+        'reference [' + use.label + '] has no matching definition in this file');
     }
   }
 
