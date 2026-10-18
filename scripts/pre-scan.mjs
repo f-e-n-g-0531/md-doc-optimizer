@@ -47,8 +47,13 @@ const ESCAPED_BRACKET_RE = /\\([\[\]])/g;
 const ESCAPED_OPEN_BRACKET_RE = /\\\[/g;
 const MASTER_RE = /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:tree|blob)\/master(?=[/?#)\s]|$)/gi;
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g;
-const FENCE_OPEN_RE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
-const FENCE_CLOSE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+// 顶层与容器（blockquote/列表）内的围栏
+const CONTAINER_FENCE_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*(`{3,}|~{3,})(.*)$/;
+// 原始 HTML 块：<pre>/<script>/<style>/<textarea>，块内不是 Markdown
+const HTML_RAW_BLOCK_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*<(pre|script|style|textarea)\b/i;
+// 原始 HTML 内的本地链接/图片：先匹配完整标签，再按属性解析，避免把属性值里的 "href=" 当链接
+const HTML_TAG_RE = /<(a|img)\b((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/gi;
+const HTML_ATTR_RE = /([^\s=>/]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
 const LINK_TARGET_URL_RE = /\]\(\s*<?(https?:\/\/[^\s()<>）】」》]+)/g;
 const BARE_URL_RE = /https?:\/\/[^\s<>"'`()）】」》]+/g;
 // 显式 HTML 锚点（<a name="x"> / <span id='y'>）：GitHub 上 #x 可直接命中
@@ -128,6 +133,13 @@ function decodeEntities(text) {
     return value === undefined ? match : value;
   });
 }
+// 提取围栏标记：返回 {char, len, info}；顶层、blockquote、列表内的围栏都识别
+function fenceTokenOf(line) {
+  const m = line.match(CONTAINER_FENCE_RE);
+  if (!m) return null;
+  return { char: m[1][0], len: m[1].length, info: m[2] };
+}
+
 // 标题先取渲染文本（去 HTML 标签、链接语法、行内代码标记），再解码实体，最后算 slug
 function headingPlainText(raw) {
   const rendered = raw.replace(/<[^>]*>/g, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`/g, '').trim();
@@ -157,29 +169,45 @@ function analyzeFile(absPath, targetAbs) {
     }
   }
 
-  // 围栏代码块：3+ 反引号或 3+ 波浪线开关，围栏内容整体忽略。
-  // 同时跟踪 HTML 注释：注释里的围栏标记不算围栏，避免把注释之后的正文一起吞掉。
+  // 围栏代码块：顶层与容器（blockquote/列表）内围栏都识别，内容整体忽略。
+  // 同时忽略 <pre>/<script>/<style>/<textarea> 原始 HTML 块，并跟踪 HTML 注释：
+  // 注释里的围栏标记不算围栏，避免把注释之后的正文一起吞掉。
   let fence = null;
   let fenceCommentOpen = false;
+  let htmlRawBlock = null;
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
     const line = lines[i];
     if (fence) {
       ignored[i] = true;
-      const close = line.match(FENCE_CLOSE_RE);
-      if (close && close[1][0] === fence.char && close[1].length >= fence.len) fence = null;
+      const token = fenceTokenOf(line);
+      if (token && token.char === fence.char && token.len >= fence.len && token.info.trim() === '') {
+        fence = null;
+      }
+      continue;
+    }
+    if (htmlRawBlock) {
+      ignored[i] = true;
+      if (new RegExp('</' + htmlRawBlock + '\\s*>', 'i').test(line)) htmlRawBlock = null;
       continue;
     }
     if (fenceCommentOpen) {
       if (maskInlineCode(line).includes('-->')) fenceCommentOpen = false;
       continue; // 注释内容不是 Markdown，不参与围栏判断
     }
-    const open = line.match(FENCE_OPEN_RE);
-    if (open) {
-      if (!(open[1][0] === '`' && open[2].includes('`'))) {
-        fence = { char: open[1][0], len: open[1].length };
+    const token = fenceTokenOf(line);
+    if (token) {
+      if (!(token.char === '`' && token.info.includes('`'))) {
+        fence = { char: token.char, len: token.len };
         ignored[i] = true;
       }
+      continue;
+    }
+    const rawOpen = line.match(HTML_RAW_BLOCK_RE);
+    if (rawOpen) {
+      const tag = rawOpen[1].toLowerCase();
+      ignored[i] = true;
+      if (!new RegExp('</' + tag + '\\s*>', 'i').test(line)) htmlRawBlock = tag;
       continue;
     }
     // 非围栏行：检查是否开启 HTML 注释（行内代码里的 <!-- 不算）
@@ -507,6 +535,17 @@ function detectLocal(doc, docsByAbs, add) {
     for (const m of masked.matchAll(EMPTY_TARGET_RE)) {
       add(doc, lineNo, 'empty-link-target',
         (m[1] === '!' ? 'image' : 'link') + ' target is empty: ' + m[0].trim());
+    }
+    for (const tag of masked.matchAll(HTML_TAG_RE)) {
+      const tagName = tag[1].toLowerCase();
+      let target = null;
+      for (const attr of tag[2].matchAll(HTML_ATTR_RE)) {
+        const name = attr[1].toLowerCase();
+        if ((tagName === 'a' && name === 'href') || (tagName === 'img' && name === 'src')) {
+          target = attr[2] !== undefined ? attr[2] : attr[3] !== undefined ? attr[3] : attr[4];
+        }
+      }
+      if (target) checkLink(lineNo, target, { image: tagName === 'img' });
     }
     for (const m of masked.matchAll(MASTER_RE)) {
       add(doc, lineNo, 'default-branch-master-link', 'hardcoded /master/ path; verify repository default branch');

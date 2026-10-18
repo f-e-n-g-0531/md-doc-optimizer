@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.12.0 (2026-10-18)
+
+- 预扫新增原始 HTML 内链/图片检查：`<a href>`、`<img src>` 的本地相对路径复用 broken-local-link/image、broken-anchor、case-mismatch-link 规则；`data-href`/`data-src` 等非真实属性不误报，外部 URL 仍交给 lychee。
+- 围栏识别扩展到容器（blockquote/列表）内围栏，并识别 `<pre>`/`<script>`/`<style>`/`<textarea>` 原始 HTML 块（含 blockquote/列表内）；区域内链接、引用、标题、抑制标记一律不参与扫描（此前容器围栏内容会被误扫、标记会误抑制）。
+- 抑制标记作用域收敛：顶层/容器围栏、行内代码、原始 HTML 块、外层 HTML 注释里的标记不生效；缩进代码块（4 空格）仍生效（代码示例请用围栏）。
+- 文档新增「已知限制」：缩进代码块标记、setext 标题锚点、near-duplicate O(n²)、HTML 只覆盖 href/src 且不解析多行属性。
+- 注意：围栏/原始 HTML 块行不再计入 near-duplicate 相似度，Jaccard 数值可能与 v1.11 不同；升级后若使用 baseline，建议重建基线。
+- 自测断言从 883 增至 969，覆盖 HTML 内链/图片/锚点/大小写、data 属性不误报、容器围栏与原始 HTML 块（含容器内）忽略、围栏内标记不生效。
+- 同步更新 references/tool-configs.md（候选说明、HTML/代码上下文规则、已知限制、真实仓库复跑数据）、README、SKILL.md；版本号升至 1.12.0。
+
 ## 1.11.0 (2026-10-18)
 
 - 预扫新增行内抑制标记（HTML 注释，不渲染）：`<!-- pre-scan-ignore -->` 抑制同行、`<!-- pre-scan-ignore-next-line -->` 抑制下一行、`<!-- pre-scan-disable -->`/`<!-- pre-scan-enable -->` 抑制区间（未闭合时抑制到文件末尾）；标记后可写 `: 原因`。

@@ -210,6 +210,32 @@ function runAssertions(tmp) {
     'TODO: reported.', '',
     '`<!-- pre-scan-ignore -->` TODO: reported too.', '',
   ].join('\n'));
+  addFile('docs/html-links.md',
+    '# HTML Links\n\n' +
+    '<a href="./missing-html.md">bad</a>\n\n' +
+    '<a href="./valid.md">good</a>\n\n' +
+    '<a href="#no-such-anchor">bad anchor</a>\n\n' +
+    '<img src="./img/absent.png" alt="bad">\n\n' +
+    '<img src="./img/present.png" alt="good">\n\n' +
+    '<img src="https://example.com/x.png" alt="external">\n\n' +
+    '<img src="./img/Present.png" alt="case">\n\n' +
+    '<a data-href="./nope.md">data attribute</a>\n\n' +
+    '<img data-src="./nope.png" alt="data attribute">\n\n' +
+    '<a title="see href=./nope.md">attribute value</a>\n\n' +
+    '<img title="see src=./nope.png" alt="attribute value">\n');
+  addFile('docs/container-fence.md',
+    '# Container Fence\n\n' +
+    '> \`\`\`md\n> [broken in quote fence](./nope1.md)\n> <!-- pre-scan-disable -->\n> \`\`\`\n\n' +
+    '- \`\`\`md\n  [broken in list fence](./nope2.md)\n  \`\`\`\n\n' +
+    '[visible](./nope3.md)\n');
+  addFile('docs/container-html.md',
+    '# Container HTML\n\n' +
+    '> <pre>\n> [broken in quote pre](./nope1.md)\n> </pre>\n\n' +
+    '- <pre>\n  [broken in list pre](./nope2.md)\n  </pre>\n\n' +
+    '[visible](./nope3.md)\n');
+  addFile('docs/html-pre.md',
+    '# Pre Block\n\n<pre>\n[broken in pre](./nope1.md)\n<!-- pre-scan-disable -->\n</pre>\n\n' +
+    '[visible](./nope2.md)\n');
   addFile('docs/suppression-open.md',
     '# Suppression Open\n\n<!-- pre-scan-disable -->\n\nTODO: hidden.\n\n[hidden](./nope.md)\n');
   addFile('docs/suppression-enable.md',
@@ -447,6 +473,28 @@ function runAssertions(tmp) {
   eq(suppressionEnable.map((c) => c.line), [3, 5], 'links on both sides of a standalone enable are reported');
 
   eq(ofFile('docs/suppression-reason.md'), [], 'markers accept a ": reason" suffix');
+
+  const htmlLinks = ofFile('docs/html-links.md');
+  eq(htmlLinks.map((c) => c.kind),
+    ['broken-local-link', 'broken-anchor', 'broken-local-image', 'case-mismatch-link'],
+    'HTML <a href> and <img src> local targets are checked');
+  eq(htmlLinks.map((c) => c.line), [3, 7, 9, 15], 'HTML link/image candidate lines');
+  ok(htmlLinks[0].evidence.includes('missing-html.md'), 'HTML link evidence names the target');
+
+  const containerFence = ofFile('docs/container-fence.md');
+  eq(containerFence.map((c) => c.kind), ['broken-local-link'],
+    'blockquote/list fences are ignored, including markers inside them');
+  eq(containerFence[0].line, 12, 'only content after container fences is reported');
+
+  const containerHtml = ofFile('docs/container-html.md');
+  eq(containerHtml.map((c) => c.kind), ['broken-local-link'],
+    'raw HTML blocks inside blockquote/list are ignored');
+  eq(containerHtml[0].line, 11, 'only content after container raw HTML blocks is reported');
+
+  const htmlPre = ofFile('docs/html-pre.md');
+  eq(htmlPre.map((c) => c.kind), ['broken-local-link'],
+    'raw HTML blocks (<pre>) are ignored, including markers inside them');
+  eq(htmlPre[0].line, 8, 'only content after the raw HTML block is reported');
 
   const suppressionOuter = ofFile('docs/suppression-outer-comment.md');
   eq(suppressionOuter.map((c) => c.kind), ['broken-local-link'],

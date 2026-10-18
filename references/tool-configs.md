@@ -188,7 +188,7 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 | `<!-- pre-scan-ignore-next-line -->` | 抑制下一行的候选 |
 | `<!-- pre-scan-disable -->` … `<!-- pre-scan-enable -->` | 抑制区间内的候选；未闭合时抑制到文件末尾 |
 
-- 只影响候选上报，不影响标题/链接/锚点等解析。**作用域边界**：顶层围栏（≤3 空格缩进）与单行行内代码里的标记不生效，外层多行 HTML 注释里的标记字面量也不生效；缩进代码块（4 空格）、列表/引用块内的围栏、HTML `<pre>`/`<code>` 块里的标记仍会被识别——不要在这些位置写标记示例，否则会静默抑制后续候选。没有激活区间时 `pre-scan-enable` 是 no-op。
+- 只影响候选上报，不影响标题/链接/锚点等解析。**作用域边界**：顶层/容器围栏、单行行内代码、`<pre>` 等原始 HTML 块、外层多行 HTML 注释里的标记不生效；缩进代码块（4 空格）里的标记仍会生效——代码示例请用围栏。没有激活区间时 `pre-scan-enable` 是 no-op。
 - 标记后可用 `: 原因` 写说明（如 `<!-- pre-scan-ignore: 规则示例 -->`）；被抑制的候选不会进入 JSON、summary、baseline 与 `--fail-on` 门禁。标记本身是 HTML 注释，读者不可见。
 
 存量仓库可用 baseline 做「只拦新增」的棘轮（ratchet）：
@@ -197,14 +197,21 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 - `--baseline <file>`：配合 `--fail-on` 使用，只对基线之外的新候选失败；stderr 会说明忽略了多少条基线候选。基线键为 `file + kind + evidence`；比较时只归一已知行号型 evidence（`repeat of heading/paragraph at line N`、`first H1 at line N`、`already defined at line N`），路径里的字面 `line 12` 不会误伤。文档大改后若证据文本本身变化导致旧条目失配，重新生成 baseline 并 review diff。
 - 基线文件缺失、坏 JSON、tool/schema_version 不符，或条目缺字段/未知 kind/空证据/非 POSIX 相对路径（绝对路径、反斜杠路径），都按用法错误退出 2。
 
+**已知限制**（按需接受）：
+
+- 缩进代码块（4 空格）里的抑制标记仍会生效；代码示例请用围栏。
+- setext 标题（`Title` + `---`）不参与锚点计算。
+- `near-duplicate-files` 为 O(n²)，数千文件的大仓库建议先按 docs/ 等子目录分批扫描；v1.12 起围栏/原始 HTML 块行不再计入相似度，Jaccard 数值可能与旧版不同（旧 baseline 需重建）。
+- 原始 HTML 只检查 `<a href>` / `<img src>` 的本地相对路径（不处理 `srcset`、`style`、JS 注入链接）；多行属性（`<a\nhref=...>`）不解析。
+
 输出契约见 references/pre-scan.schema.json（JSON Schema 2020-12）；CI 会用真实输出做校验。新增或改名 kind 时必须同步 schema，`scripts/check-docs.mjs` 会比对脚本 CATEGORY、schema 枚举与类别映射。
 
 覆盖的候选类型（kind / 类别）：
 
 | kind | 类别 | 说明 |
 |---|---|---|
-| broken-local-link | B | 相对路径链接指向不存在的文件 |
-| broken-local-image | B | 相对路径图片（`![](...)`）指向不存在的文件 |
+| broken-local-link | B | 相对路径链接（Markdown 或 `<a href>`）指向不存在的文件 |
+| broken-local-image | B | 相对路径图片（Markdown 或 `<img src>`）指向不存在的文件 |
 | case-mismatch-link | B | 路径大小写与磁盘真实文件名不一致：Windows/macOS 本地能打开，Linux/CI 上 404 |
 | broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在（按 GitHub 锚点规则计算） |
 | empty-link-target | B | 空链接/图片目标：`[]()`、`[]( "title")`、`[](<> "title")`、空定义 `[label]:` |
@@ -229,6 +236,8 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 - **引用式链接**：支持完整 `[text][label]`、折叠 `[label][]` 与快捷 `[label]`（含快捷图片 `![alt]`）；定义可位于行首、blockquote 或列表项内，目标可换行；脚注 `[^1]: ...` 不是链接定义、不参与检查，但脚注正文里的引用仍会扫描。
 - **图片**：只检查本地相对路径（含图片形式的引用定义、`[![alt](img)](link)` 嵌套写法，以及 alt 内嵌一层方括号）；外部 URL 交给 lychee 等链接检查器。
 - **HTML 注释**：注释里的链接、引用定义、标题与显式锚点都不参与检查；注释里的围栏标记也不能吞掉注释后的正文。
+- **原始 HTML**：检查 `<a href>` 与 `<img src>` 的本地相对路径（含锚点、大小写；`data-href`/`data-src` 不算）；外部 URL 交给 lychee。`<pre>`/`<script>`/`<style>`/`<textarea>` 块内不扫描。
+- **代码上下文**：顶层与 blockquote/列表内的围栏、`<pre>` 等原始 HTML 块（含容器内）都识别，内容整体忽略；缩进代码块见下方已知限制。
 - **路径分隔符**：链接里的反斜杠（含编码后的 `%5C`）按 GitHub 行为报失效——线上会变成 `%5C` 404，即使 Windows 本地能打开；统一用 `/`。CommonMark 的标点转义（如 `my\_file.md`）先解转义，不算分隔符。
 - **空目标**：`[]()`、`[]( "title")`、`[](<> "title")` 报空目标；按 CommonMark，`]("title")` 的引号属于 destination，按普通链接核对；`[label]:`（无目标）属启发式候选（CommonMark 会按普通段落渲染），需人工确认。
 
@@ -238,7 +247,7 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 
 注意：规则文档会引用候选词表本身（如本 skill 的 SKILL.md 写了「目前/最近/TODO」），因此对本仓库运行会得到一批预期内的候选噪音；这类命中应 triage 为 no action。如果希望彻底静音，可用上面的行内抑制标记，或 baseline 只拦新增。
 
-2026-10-18 在两个案例仓库快照上复跑：docproof 0 个候选；zhlint 30 个候选（含 3 个 `default-branch-master-link`、1 个 `near-duplicate-files`），恰好提示了案例里的失效链接与「README 由 docs/index.md 生成」线索——但候选只是线索，最终结论仍来自逐条证据核对。1.7.0 修正锚点与大小写、1.8.0 补齐图片/引用式定义/空目标规则后按同一快照复跑，结果仍为 docproof 0、zhlint 30（无新增候选）。
+2026-10-18 在案例快照上复跑：v1.11.0 前为 docproof 0 / zhlint 30；v1.12.0 增加 HTML 内链检查与容器围栏/原始 HTML 块忽略后，docproof 0、zhlint 28（新增 1 条 `<a href>` 失效链接，减少 3 条原始 HTML `<script>` 块内占位噪音；3 个 `default-branch-master-link`、1 个 `near-duplicate-files` 仍在）——候选只是线索，最终结论仍来自逐条证据核对。
 
 ## GitHub Actions —— 组合检查（自包含版）
 
