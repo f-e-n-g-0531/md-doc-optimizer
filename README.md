@@ -127,7 +127,7 @@ md-doc-optimizer/
 
 推送 `v*` 标签（或手动触发 release 工作流）会先过同一套检查，再发布 GitHub Release。
 
-仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON，契约见 [pre-scan.schema.json](./references/pre-scan.schema.json)；`--text` 按 `文件:行 [类别] kind -- 证据 | 原文` 输出人读摘要（证据是命中的具体词或路径）；`--fail-on <kind,...>` 在命中指定类型时以退出码 1 失败，可直接做 CI 门禁（默认跳过 `fixture` 上下文，`--include-fixtures` 可包含；命中时 stderr 最多列 20 条明细，完整列表看 JSON）；支持 `<!-- pre-scan-ignore -->` 等行内抑制标记；存量仓库可先 `--write-baseline` 记录现状，再用 `--baseline`（需配合 `--fail-on`）只拦新增候选。候选覆盖死链/锚点（含 ATX 与 setext 标题、按 GitHub 锚点规则计算）、失效图片（含原始 HTML 内链/图片与 srcset）、空目标、引用式链接与未使用/重复定义、大小写不一致的路径（跨平台一致）、硬编码分支链接、时间敏感词、占位标记、重复标题/段落与疑似生成副本，供 P2 收集候选用。**候选必须再人工核对，不是结论。**
+仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON，契约见 [pre-scan.schema.json](./references/pre-scan.schema.json)；`--text` 按 `文件:行 [类别] kind -- 证据 | 原文` 输出人读摘要（证据是命中的具体词或路径）；`--fail-on <kind,...>` 在命中指定类型时以退出码 1 失败，可直接做 CI 门禁（默认跳过 `fixture` 上下文，`--include-fixtures` 可包含；命中时 stderr 最多列 20 条明细，完整列表看 JSON）；支持 `<!-- pre-scan-ignore -->` 等行内抑制标记；存量仓库可先 `--write-baseline` 记录现状，再用 `--baseline`（需配合 `--fail-on`）只拦新增候选；大仓 near-duplicate 需要严格结果时加 `--exact-near-duplicates`。候选覆盖死链/锚点（含 ATX 与 setext 标题、按 GitHub 锚点规则计算）、失效图片（含原始 HTML 内链/图片与 srcset）、空目标、引用式链接与未使用/重复定义、大小写不一致的路径（跨平台一致）、硬编码分支链接、时间敏感词、占位标记、重复标题/段落与疑似生成副本，供 P2 收集候选用。**候选必须再人工核对，不是结论。**
 
 ## 实测案例（真实仓库，报告模式）
 

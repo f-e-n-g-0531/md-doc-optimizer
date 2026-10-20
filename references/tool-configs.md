@@ -172,6 +172,7 @@ node scripts/pre-scan.mjs <目标目录> --text   # 输出人读摘要
 node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link,broken-anchor  # 命中即失败
 node scripts/pre-scan.mjs <目标目录> --write-baseline .pre-scan-baseline.json    # 记录当前候选为基线
 node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline .pre-scan-baseline.json  # 只拦新增
+node scripts/pre-scan.mjs <目标目录> --exact-near-duplicates  # 大仓 near-duplicate 强制精确两两比较
 ~~~
 
 `--text` 每行按 `file:line [类别] kind -- evidence | 原文` 输出：`evidence` 是命中的具体词或路径（例如同一行里的「目前」「最近」会分别列出），便于逐条 triage。
@@ -200,8 +201,8 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 **已知限制**（按需接受）：
 
 - 缩进代码块/容器嵌套按近似块上下文识别，极端嵌套可能偏差；代码示例仍建议用围栏。
-- `near-duplicate-files` 超过 50 个候选文件时走 MinHash+LSH 近似召回（再做精确 Jaccard），极大规模仓库仍建议分批；v1.12 起围栏/原始 HTML 块行、v1.13 起缩进代码行不计入相似度，旧 baseline 可能需重建。
-- 原始 HTML 只检查 `<a href>`、`<img src/srcset>`、`<source src/srcset>` 的本地相对路径；含 `data:`/查询串的 `srcset` 按启发式跳过；不处理 `style`/JS 注入链接。
+- `near-duplicate-files` 超过 50 个候选文件时默认走 MinHash+LSH（128 哈希 / 32 band，阈值 0.8 附近召回很高但仍属近似）；需要严格结果时加 `--exact-near-duplicates` 强制精确两两比较。超大仓库仍建议分批；v1.12 起围栏/原始 HTML 块行、v1.13 起缩进代码行不计入相似度，旧 baseline 可能需重建。
+- 原始 HTML 只检查 `<a href>`、`<img src/srcset>`、`<source src/srcset>` 的本地相对路径；srcset 按 HTML 规范风格解析（URL 可含逗号、data URI 整体跳过）；不处理 `style`/JS 注入链接。
 
 输出契约见 references/pre-scan.schema.json（JSON Schema 2020-12）；CI 会用真实输出做校验。新增或改名 kind 时必须同步 schema，`scripts/check-docs.mjs` 会比对脚本 CATEGORY、schema 枚举与类别映射。
 
@@ -241,7 +242,7 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline 
 - **路径分隔符**：链接里的反斜杠（含编码后的 `%5C`）按 GitHub 行为报失效——线上会变成 `%5C` 404，即使 Windows 本地能打开；统一用 `/`。CommonMark 的标点转义（如 `my\_file.md`）先解转义，不算分隔符。
 - **空目标**：`[]()`、`[]( "title")`、`[](<> "title")` 报空目标；按 CommonMark，`]("title")` 的引号属于 destination，按普通链接核对；`[label]:`（无目标）属启发式候选（CommonMark 会按普通段落渲染），需人工确认。
 
-`near-duplicate-files` 小仓精确两两比较；超过 50 个候选文件自动改用 MinHash+LSH 取候选对再做精确 Jaccard（阈值 0.8，近似召回），超大仓库仍可分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
+`near-duplicate-files` 小仓精确两两比较；超过 50 个候选文件默认用 MinHash+LSH 取候选对再做精确 Jaccard（阈值 0.8）；`--exact-near-duplicates` 可强制精确比较。超大仓库仍可分批扫描。每个候选带 `context` 字段：`fixture`（路径含 `test/`、`tests/`、`fixtures/`、`__fixtures__/`、`__snapshots__/`，或文件名以 `example-` 开头；先按测试夹具边界排除）或 `docs`。
 
 自测：`node scripts/pre-scan.test.mjs`（CI 会跑）。
 

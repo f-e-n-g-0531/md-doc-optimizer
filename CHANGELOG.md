@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.14.0 (2026-10-20)
+
+- srcset 改为 HTML 规范风格解析：URL 可含逗号、data URI 作为整体 URL（协议跳过），不再需要「含 data:/查询串就跳过」的启发式；HTML 属性值先解实体。
+- near-duplicate 默认 MinHash 提高到 128 哈希 / 32 band（阈值 0.8 附近召回接近完整）；新增 `--exact-near-duplicates` 强制精确两两比较，需要严格结果时使用。
+- 缩进代码块开始条件更贴近块语义：标题/分隔线/围栏/原始 HTML 块之后可无空行直接开始；列表续行判断保持。
+- 已知限制更新：移除 srcset 启发式跳过；保留近似块上下文、超大仓分批、HTML 不覆盖 style/JS。
+- 自测断言从 1069 增至 1074，覆盖 srcset data URI/逗号查询串、精确 near-duplicate 模式、标题/原始 HTML 块后缩进代码、HTML 属性实体解码。
+- 同步更新 references/tool-configs.md、README、SKILL.md；版本号升至 1.14.0。
+
 ## 1.13.0 (2026-10-18)
 
 - 支持 setext 标题（`Title` + `===`/`---`，含 blockquote/列表内与多行段落）：参与 slug、重复标题、多 H1 与锚点计算；段落去重跳过标题行。

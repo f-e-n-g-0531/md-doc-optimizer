@@ -210,6 +210,13 @@ function runAssertions(tmp) {
     'TODO: reported.', '',
     '`<!-- pre-scan-ignore -->` TODO: reported too.', '',
   ].join('\n'));
+  addFile('docs/indented-after-html.md',
+    '# HTML Block Then Code\n\n<pre>\nraw\n</pre>\n    [bad after pre](./nope-after-pre.md)\n\n' +
+    '[visible](./valid.md)\n');
+  addFile('docs/indented-after-heading.md',
+    '# Heading\n    [code after heading](./nope1.md)\n\n' +
+    '## Heading2\n    [code after h2](./nope2.md)\n\n' +
+    '[visible](./valid.md)\n');
   addFile('docs/indented-code.md',
     '# Indented Code\n\n' +
     '    [broken in indented code](./nope1.md)\n' +
@@ -235,7 +242,10 @@ function runAssertions(tmp) {
     '<img srcset="./img/absent.png 1x, ./img/present.png 2x" alt="srcset">\n\n' +
     '<source srcset="./img/absent2.png 2x">\n\n' +
     '<img srcset="data:image/png;base64,AAAA 1x" alt="data uri">\n\n' +
-    '<img srcset="./x.png?q=1,2 2x" alt="query comma">\n');
+    '<img srcset="./img/present.png?q=1,2 2x" alt="query comma">\n');
+  addFile('docs/a&b.md', '# A and B\n\nTarget file with an ampersand.\n');
+  addFile('docs/html-entities.md',
+    '# Entities\n\n[plain](./a&b.md)\n\n<a href="./a&amp;b.md">html</a>\n');
   addFile('docs/html-links.md',
     '# HTML Links\n\n' +
     '<a href="./missing-html.md">bad</a>\n\n' +
@@ -504,6 +514,8 @@ function runAssertions(tmp) {
   eq(indentedCode.map((c) => c.kind), ['broken-local-link', 'broken-local-link', 'broken-local-link'],
     'indented code blocks are ignored; list continuations and blockquotes are scanned');
   eq(indentedCode.map((c) => c.line), [6, 10, 14], 'indented code candidate lines');
+  eq(ofFile('docs/indented-after-heading.md'), [], 'indented code right after headings is ignored');
+  eq(ofFile('docs/indented-after-html.md'), [], 'indented code right after raw HTML blocks is ignored');
 
   const setext = ofFile('docs/setext.md');
   eq(setext, [], 'setext headings produce usable anchors');
@@ -516,6 +528,8 @@ function runAssertions(tmp) {
     ['broken-local-link', 'broken-local-image', 'broken-local-image', 'broken-local-image'],
     'multiline HTML attributes and srcset are checked');
   eq(htmlMultiline.map((c) => c.line), [3, 6, 9, 11], 'multiline HTML candidate lines');
+
+  eq(ofFile('docs/html-entities.md'), [], 'HTML attribute entities are decoded before path checks');
 
   const htmlLinks = ofFile('docs/html-links.md');
   eq(htmlLinks.map((c) => c.kind),
@@ -684,6 +698,11 @@ function runAssertions(tmp) {
   eq(manyNear[0].file, 'a.md', 'near-duplicate reported at the lexicographically smaller file');
   ok(manyNear[0].evidence.includes('b.md'), 'near-duplicate evidence names the paired file');
   ok(manyNear[0].evidence.includes('0.87'), 'near-duplicate evidence keeps the exact Jaccard');
+  const manyExactRun = spawnSync(process.execPath,
+    [scriptPath, manyNearDir, '--exact-near-duplicates'], { encoding: 'utf8' });
+  eq(manyExactRun.status, 0, '--exact-near-duplicates scan exits 0');
+  eq(JSON.parse(manyExactRun.stdout).candidates.filter((c) => c.kind === 'near-duplicate-files').length, 1,
+    'exact near-duplicate mode also finds the pair');
 
   // ---- --fail-on 门禁 ----
   const cleanDir = join(tmp, 'clean');

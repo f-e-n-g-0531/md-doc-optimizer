@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // md-doc-optimizer 预扫描（pre-scan）：只读扫描目标目录下的 Markdown，输出确定性候选清单。
 // 用法：node scripts/pre-scan.mjs [target-dir] [--text] [--fail-on kind1,kind2] [--include-fixtures]
-//                              [--baseline file] [--write-baseline file]
+//                              [--baseline file] [--write-baseline file] [--exact-near-duplicates]
 // 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法错误
 import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, dirname, parse } from 'node:path';
@@ -13,8 +13,8 @@ const BASELINE_SCHEMA_VERSION = 1;
 // near-duplicate：小仓精确两两比较；大仓用 MinHash + LSH 取候选对，再做精确 Jaccard
 const NEAR_DUP_THRESHOLD = 0.8;
 const NEAR_DUP_BRUTE_LIMIT = 50;
-const NEAR_DUP_HASHES = 64;
-const NEAR_DUP_BANDS = 16;
+const NEAR_DUP_HASHES = 128;
+const NEAR_DUP_BANDS = 32;
 const NEAR_DUP_ROWS = 4;
 // 行内抑制标记（HTML 注释，不渲染）：只影响候选上报，不影响解析。
 // 允许在标记后写 ": 原因"；按注释边界解析，外层 HTML 注释里的标记字面量不生效。
@@ -61,6 +61,29 @@ const HTML_RAW_BLOCK_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*<(pre|s
 // 标签可跨行（属性换行），srcset 按逗号拆成候选 URL。
 const HTML_TAG_RE = /^<(a|img|source)\b((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/i;
 const HTML_ATTR_RE = /([^\s=>/]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+
+// 解析 srcset（HTML 规范风格）：跳过空白/逗号，URL 收集到空白为止（允许 URL 内含逗号，如 data URI），
+// 再跳过描述符到下一个逗号；末尾逗号表示该候选无描述符。
+function parseSrcset(value) {
+  const urls = [];
+  let index = 0;
+  while (index < value.length) {
+    while (index < value.length && /[\s,]/.test(value[index])) index++;
+    if (index >= value.length) break;
+    const start = index;
+    while (index < value.length && !/\s/.test(value[index])) index++;
+    let url = value.slice(start, index);
+    if (url.endsWith(',')) {
+      url = url.replace(/,+$/, '');
+      if (url) urls.push(url);
+      continue;
+    }
+    while (index < value.length && value[index] !== ',') index++;
+    if (index < value.length) index++;
+    if (url) urls.push(url);
+  }
+  return urls;
+}
 const LINK_TARGET_URL_RE = /\]\(\s*<?(https?:\/\/[^\s()<>）】」》]+)/g;
 const BARE_URL_RE = /https?:\/\/[^\s<>"'`()）】」》]+/g;
 // 显式 HTML 锚点（<a name="x"> / <span id='y'>）：GitHub 上 #x 可直接命中
@@ -195,7 +218,7 @@ function analyzeFile(absPath, targetAbs) {
   let indentedCode = false;
   let listContentIndent = 0;
   let listQuoteDepth = 0;
-  let lastLineBlank = true;
+  let canStartIndentedCode = true; // 文件开头、空行、围栏/HTML 块/标题之后允许缩进代码
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
     const line = lines[i];
@@ -204,12 +227,16 @@ function analyzeFile(absPath, targetAbs) {
       const token = fenceTokenOf(line);
       if (token && token.char === fence.char && token.len >= fence.len && token.info.trim() === '') {
         fence = null;
+        canStartIndentedCode = true;
       }
       continue;
     }
     if (htmlRawBlock) {
       ignored[i] = true;
-      if (new RegExp('</' + htmlRawBlock + '\\s*>', 'i').test(line)) htmlRawBlock = null;
+      if (new RegExp('</' + htmlRawBlock + '\\s*>', 'i').test(line)) {
+        htmlRawBlock = null;
+        canStartIndentedCode = true;
+      }
       continue;
     }
     if (fenceCommentOpen) {
@@ -247,15 +274,22 @@ function analyzeFile(absPath, targetAbs) {
       } else if (contentIndent < listContentIndent) {
         listContentIndent = 0;
       }
-      if (!listMarker && lastLineBlank && contentIndent >= listContentIndent + 4 &&
+      if (!listMarker && canStartIndentedCode && contentIndent >= listContentIndent + 4 &&
         !fenceTokenOf(contentLine) && !HTML_RAW_BLOCK_RE.test(contentLine)) {
         indentedCode = true;
         ignored[i] = true;
-        lastLineBlank = false;
+        canStartIndentedCode = false;
         continue;
       }
     }
-    lastLineBlank = !contentTrimmed;
+    if (!contentTrimmed) {
+      canStartIndentedCode = true;
+    } else {
+      // 标题 / 分隔线 / setext 下划线之后，缩进代码可以不带空行直接开始
+      canStartIndentedCode = /^\s{0,3}#{1,6}(?:\s|$)/.test(contentLine) ||
+        /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(contentLine) ||
+        /^\s{0,3}(?:=+|-+)\s*$/.test(contentLine);
+    }
     const token = fenceTokenOf(line);
     if (token) {
       if (!(token.char === '`' && token.info.includes('`'))) {
@@ -624,12 +658,10 @@ function detectLocal(doc, docsByAbs, add) {
         const value = attr[2] !== undefined ? attr[2] : attr[3] !== undefined ? attr[3] : attr[4];
         if (!value) continue;
         if ((tagName === 'a' && name === 'href') || (tagName !== 'a' && name === 'src')) {
-          checkLink(i + 1, value, { image: tagName !== 'a' });
+          checkLink(i + 1, decodeEntities(value), { image: tagName !== 'a' });
         } else if (tagName !== 'a' && name === 'srcset') {
-          if (/data:/i.test(value) || value.includes('?')) continue;
-          for (const part of value.split(',')) {
-            const url = part.trim().split(/\s+/)[0];
-            if (url) checkLink(i + 1, url, { image: true });
+          for (const url of parseSrcset(decodeEntities(value))) {
+            checkLink(i + 1, url, { image: true });
           }
         }
       }
@@ -819,11 +851,11 @@ function lshCandidatePairs(listed) {
 }
 
 // 两文件规范化非空行集合的 Jaccard 相似度 >= 0.8 即 near-duplicate，只在字典序较小文件报一条
-function detectNearDuplicates(docs, add) {
+function detectNearDuplicates(docs, add, exact) {
   const listed = docs.filter((doc) => doc.nonEmptyLines.size >= 10)
     .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   let pairs = [];
-  if (listed.length <= NEAR_DUP_BRUTE_LIMIT) {
+  if (exact || listed.length <= NEAR_DUP_BRUTE_LIMIT) {
     for (let i = 0; i < listed.length; i++) {
       for (let j = i + 1; j < listed.length; j++) pairs.push([i, j]);
     }
@@ -990,6 +1022,7 @@ function main() {
   const args = process.argv.slice(2);
   let textMode = false;
   let includeFixtures = false;
+  let exactNearDuplicates = false;
   let baselinePath = null;
   let writeBaselinePath = null;
   const failOn = new Set();
@@ -1002,6 +1035,10 @@ function main() {
     }
     if (arg === '--include-fixtures') {
       includeFixtures = true;
+      continue;
+    }
+    if (arg === '--exact-near-duplicates') {
+      exactNearDuplicates = true;
       continue;
     }
     if (arg === '--fail-on' || arg.startsWith('--fail-on=')) {
@@ -1102,7 +1139,7 @@ function main() {
     });
   };
   for (const doc of docs) detectLocal(doc, docsByAbs, add);
-  detectNearDuplicates(docs, add);
+  detectNearDuplicates(docs, add, exactNearDuplicates);
 
   // 去重 + 稳定排序（file -> line -> kind），保证同一目标重复运行输出一致
   const seen = new Set();
