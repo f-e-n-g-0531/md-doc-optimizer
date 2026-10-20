@@ -98,6 +98,7 @@
         "duplicate-paragraph",
         "duplicate-reference-definition",
         "empty-link-target",
+        "link-outside-root",
         "multiple-h1",
         "near-duplicate-files",
         "placeholder-marker",
@@ -330,6 +331,25 @@
             "properties": {
               "kind": {
                 "const": "empty-link-target"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "B"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "link-outside-root"
               }
             },
             "required": [

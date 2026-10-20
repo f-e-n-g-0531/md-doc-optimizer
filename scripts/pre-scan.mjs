@@ -4,7 +4,7 @@
 //                              [--baseline file] [--write-baseline file] [--report-out file]
 //                              [--exact-near-duplicates]
 // 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法错误
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, relative, dirname, parse } from 'node:path';
 
 const TOOL = 'md-doc-optimizer-pre-scan';
@@ -17,7 +17,7 @@ const NEAR_DUP_THRESHOLD = 0.8;
 const DUPLICATE_LINK_THRESHOLD = 3;
 // --report-out 的候选严重度映射（action 固定 annotate，等待人工 triage）
 const REPORT_SEVERITY = {
-  'broken-local-link': 'High', 'broken-local-image': 'High', 'broken-anchor': 'High',
+  'broken-local-link': 'High', 'broken-local-image': 'High', 'broken-anchor': 'High', 'link-outside-root': 'High',
   'empty-link-target': 'High', 'case-mismatch-link': 'Medium', 'undefined-reference-label': 'Medium',
   'default-branch-master-link': 'Medium', 'stale-time-phrase': 'Medium',
   'trailing-fullwidth-after-url': 'Low', 'placeholder-marker': 'Low',
@@ -43,6 +43,7 @@ const CATEGORY = {
   'trailing-fullwidth-after-url': 'C', 'stale-time-phrase': 'B', 'placeholder-marker': 'B',
   'duplicate-heading': 'A', 'duplicate-paragraph': 'A', 'multiple-h1': 'A', 'near-duplicate-files': 'A',
   'unused-reference-definition': 'A', 'duplicate-reference-definition': 'A', 'duplicate-link-target': 'A',
+  'link-outside-root': 'B',
 };
 
 // 长短语在前，命中区间重叠时只保留第一个（避免 coming soon 再报一次 soon）
@@ -193,6 +194,31 @@ function stripContainerPrefix(line) {
 function headingPlainText(raw) {
   const rendered = raw.replace(/<[^>]*>/g, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`/g, '').trim();
   return decodeEntities(rendered).trim();
+}
+
+// 向上查找最近的 .git，用于判断相对链接是否逃出仓库根
+const repoRootCache = new Map();
+function findRepoRoot(startDir) {
+  let dir = resolve(startDir);
+  const visited = [];
+  for (;;) {
+    if (repoRootCache.has(dir)) {
+      const root = repoRootCache.get(dir);
+      for (const visitedDir of visited) repoRootCache.set(visitedDir, root);
+      return root;
+    }
+    visited.push(dir);
+    if (existsSync(join(dir, '.git'))) {
+      for (const visitedDir of visited) repoRootCache.set(visitedDir, dir);
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      for (const visitedDir of visited) repoRootCache.set(visitedDir, null);
+      return null;
+    }
+    dir = parent;
+  }
 }
 
 // 解析单个 Markdown 文件：行、围栏/frontmatter 忽略标记、标题、规范化行集合
@@ -506,7 +532,7 @@ function analyzeFile(absPath, targetAbs) {
       if (m[3] !== undefined) {
         const label = m[3] === '' ? m[2] : m[3];
         const normalized = addUsage(label, isImage);
-        if (normalized) explicitUses.push({ line: i + 1, label: label, normalized: normalized });
+        if (normalized) explicitUses.push({ line: i + 1, label: label, normalized: normalized, image: isImage });
       } else if (m[2]) {
         addUsage(m[2], isImage); // 快捷图片 ![alt] 也是合法引用（定义存在时）
       }
@@ -524,6 +550,7 @@ function analyzeFile(absPath, targetAbs) {
   return {
     absPath: absPath,
     rel: rel,
+    repoRoot: findRepoRoot(dirname(absPath)),
     context: contextOf(rel),
     lines: lines,
     ignored: ignored,
@@ -634,6 +661,14 @@ function detectLocal(doc, docsByAbs, add) {
       return;
     }
     const absTarget = resolve(dirname(doc.absPath), unescapedPath);
+    if (doc.repoRoot) {
+      const relToRoot = relative(doc.repoRoot, absTarget);
+      if (relToRoot.startsWith('..') || parse(relToRoot).root) {
+        add(doc, lineNo, 'link-outside-root',
+          (isImage ? 'relative image' : 'relative link') + ' escapes repository root: ' + pathPart);
+        return;
+      }
+    }
     const onDisk = resolveOnDisk(absTarget);
     if (!onDisk.exists) {
       add(doc, lineNo, isImage ? 'broken-local-image' : 'broken-local-link',
@@ -647,6 +682,16 @@ function detectLocal(doc, docsByAbs, add) {
         ' (case-sensitive file systems will 404)');
     }
     if (rawAnchor && !isImage) checkAnchor(lineNo, onDisk.actualAbs, rawAnchor);
+  };
+
+  const duplicateTargets = new Map(); // 本地链接目标 -> { count, lines }
+  const recordDuplicateTarget = (lineNo, target) => {
+    if (!target || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(target)) return;
+    if (doc.suppressed && doc.suppressed.has(lineNo - 1)) return;
+    const entry = duplicateTargets.get(target) || { count: 0, lines: [] };
+    entry.count += 1;
+    entry.lines.push(lineNo);
+    duplicateTargets.set(target, entry);
   };
 
   // 1.0) 原始 HTML 内链/图片（标签可跨行，含 srcset）
@@ -670,7 +715,9 @@ function detectLocal(doc, docsByAbs, add) {
         const value = attr[2] !== undefined ? attr[2] : attr[3] !== undefined ? attr[3] : attr[4];
         if (!value) continue;
         if ((tagName === 'a' && name === 'href') || (tagName !== 'a' && name === 'src')) {
-          checkLink(i + 1, decodeEntities(value), { image: tagName !== 'a' });
+          const decoded = decodeEntities(value);
+          checkLink(i + 1, decoded, { image: tagName !== 'a' });
+          if (tagName === 'a') recordDuplicateTarget(i + 1, decoded);
         } else if (tagName !== 'a' && name === 'srcset') {
           for (const url of parseSrcset(decodeEntities(value))) {
             checkLink(i + 1, url, { image: true });
@@ -681,7 +728,6 @@ function detectLocal(doc, docsByAbs, add) {
   }
 
   // 1) 链接 / 锚点 / 硬编码 master 分支 / URL 后贴全角标点
-  const duplicateTargets = new Map(); // 本地内联链接目标 -> { count, lines }
   for (let i = 0; i < lines.length; i++) {
     if (doc.ignored[i]) continue;
     const lineNo = i + 1;
@@ -699,13 +745,7 @@ function detectLocal(doc, docsByAbs, add) {
       if (/^["']/.test(m[4]) && m[3].length > 0) continue; // 空目标 + 标题，交给 EMPTY_TARGET_RE
       const isImage = m[1] === '!';
       checkLink(lineNo, m[4], { image: isImage });
-      const suppressedLine = doc.suppressed && doc.suppressed.has(lineNo - 1);
-      if (!isImage && !suppressedLine && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(m[4])) {
-        const entry = duplicateTargets.get(m[4]) || { count: 0, lines: [] };
-        entry.count += 1;
-        entry.lines.push(lineNo);
-        duplicateTargets.set(m[4], entry);
-      }
+      if (!isImage) recordDuplicateTarget(lineNo, m[4]);
     }
     for (const m of masked.matchAll(EMPTY_TARGET_RE)) {
       add(doc, lineNo, 'empty-link-target',
@@ -731,7 +771,18 @@ function detectLocal(doc, docsByAbs, add) {
     }
   }
 
-  // 1.0.1) 同一本地链接目标在单文件重复出现（含锚点等不同后缀时按原文区分）
+  // 1.0.1) 同一本地链接目标在单文件重复出现（内联/HTML/引用式链接合并计数）
+  const refTargetByLabel = new Map();
+  for (const def of doc.refDefinitions) {
+    if (def.normalized && def.target && !refTargetByLabel.has(def.normalized)) {
+      refTargetByLabel.set(def.normalized, def.target);
+    }
+  }
+  for (const use of doc.explicitUses) {
+    if (use.image) continue;
+    const target = refTargetByLabel.get(use.normalized);
+    if (target) recordDuplicateTarget(use.line, target);
+  }
   for (const [target, entry] of duplicateTargets) {
     if (entry.count < DUPLICATE_LINK_THRESHOLD) continue;
     const visibleLine = entry.lines.find((line) => !(doc.suppressed && doc.suppressed.has(line - 1)));

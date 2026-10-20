@@ -217,6 +217,7 @@ node scripts/pre-scan.mjs <目标目录> --report-out draft.json  # 输出报告
 | broken-local-image | B | 相对路径图片（Markdown 或 `<img src>` / `srcset` / `<source>`）指向不存在的文件 |
 | case-mismatch-link | B | 路径大小写与磁盘真实文件名不一致：Windows/macOS 本地能打开，Linux/CI 上 404 |
 | broken-anchor | B | `#锚点` 在当前文件或目标文件中不存在（按 GitHub 锚点规则计算） |
+| link-outside-root | B | 相对链接逃出 git 仓库根（扫描子目录时仍以最近的 `.git` 为界） |
 | empty-link-target | B | 空链接/图片目标：`[]()`、`[]( "title")`、`[](<> "title")`、空定义 `[label]:` |
 | undefined-reference-label | B | 完整/折叠引用 `[text][label]`/`[label][]` 的 label 在本文件没有定义，会渲染成字面文本 |
 | default-branch-master-link | B | GitHub 链接硬编码 `/tree/master/` 或 `/blob/master/`，需核对默认分支 |
@@ -316,7 +317,7 @@ jobs:
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/pre-scan.schema.json -d "$RUNNER_TEMP/pre-scan-out.json"
           node scripts/pre-scan.mjs . --report-out "$RUNNER_TEMP/pre-scan-report.json" > "$RUNNER_TEMP/pre-scan-report-scan.json"
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "$RUNNER_TEMP/pre-scan-report.json"
-          node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,case-mismatch-link,empty-link-target,undefined-reference-label
+          node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,link-outside-root,case-mismatch-link,empty-link-target,undefined-reference-label
 
       # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/*.json）
       - name: validate report schema

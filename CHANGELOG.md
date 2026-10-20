@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.17.0 (2026-10-20)
+
+- `duplicate-link-target` 扩展到 HTML `<a href>` 与引用式链接：同一本地目标在单文件出现 >= 3 次即报（内联/HTML/引用式合并计数），被抑制行不计。
+- 新增候选类型 `link-outside-root`（B）：相对链接逃出最近的 git 仓库根（扫描子目录时仍以 `.git` 为界），避免发布后才 404。
+- CI 门禁 kind 列表加入 `link-outside-root`；report 草稿 severity 映射同步（High）。
+- 自测断言增至 1755，覆盖 HTML/引用式重复链接、仓库根越界链接。
+- 同步更新 references/tool-configs.md、README、SKILL.md、pre-scan schema；版本号升至 1.17.0。
+
 ## 1.16.0 (2026-10-20)
 
 - 新增候选类型 `duplicate-link-target`（A）：同一本地内联链接目标在单文件出现 >= 3 次时报告，缩小「链接冗余」盲区；锚点/外部链接与被抑制行不计。

@@ -20,6 +20,7 @@ const ALLOWED_KINDS = [
   'unused-reference-definition',
   'duplicate-reference-definition',
   'duplicate-link-target',
+  'link-outside-root',
   'default-branch-master-link',
   'trailing-fullwidth-after-url',
   'stale-time-phrase',
@@ -39,6 +40,7 @@ const CATEGORY_OF = {
   'unused-reference-definition': 'A',
   'duplicate-reference-definition': 'A',
   'duplicate-link-target': 'A',
+  'link-outside-root': 'B',
   'default-branch-master-link': 'B',
   'trailing-fullwidth-after-url': 'C',
   'stale-time-phrase': 'B',
@@ -251,6 +253,21 @@ function runAssertions(tmp) {
   addFile('docs/a&b.md', '# A and B\n\nTarget file with an ampersand.\n');
   addFile('docs/html-entities.md',
     '# Entities\n\n[plain](./a&b.md)\n\n<a href="./a&amp;b.md">html</a>\n');
+  mkdirSync(join(tmp, 'repo', '.git'), { recursive: true });
+  addFile('repo/README.md', '# Repo\n');
+  addFile('outside.md', '# Outside\n');
+  addFile('repo/docs/links.md',
+    '# Links\n\n[in](../README.md)\n\n[out](../../outside.md)\n');
+  addFile('docs/duplicate-link-target-extra.md', [
+    '# Dup Extra', '',
+    '<a href="./valid-only.md">h1</a>', '',
+    '<a href="./valid-only.md">h2</a>', '',
+    '<a href="./valid-only.md">h3</a>', '',
+    '[ref]: ./anchors-target.md', '',
+    '[r1][ref]', '',
+    '[r2][ref]', '',
+    '[r3][ref]', '',
+  ].join('\n'));
   addFile('docs/duplicate-link-target.md', [
     '# Dup Links', '',
     '[one](./valid.md)', '',
@@ -463,7 +480,10 @@ function runAssertions(tmp) {
     'link text with one level of nested brackets is parsed (image alt and reference-like text)');
   eq(nestedBrackets.map((c) => c.line), [3, 5], 'nested bracket lines');
 
-  eq(ofFile('docs/multiline-defs.md'), [], 'multiline and container reference definitions are resolved');
+  const multilineDefs = ofFile('docs/multiline-defs.md');
+  eq(multilineDefs.map((c) => c.kind), ['duplicate-link-target'],
+    'multiline/container definitions resolve; repeated targets are flagged');
+  eq(multilineDefs[0].line, 10, 'repeated reference targets reported at first use');
   eq(ofFile('docs/escaped-brackets.md'), [], 'escaped brackets are not treated as links');
 
   const footnoteBody = ofFile('docs/footnote-body.md');
@@ -501,11 +521,11 @@ function runAssertions(tmp) {
 
   const refDefs = ofFile('docs/ref-defs.md');
   eq(refDefs.map((c) => c.kind),
-    ['undefined-reference-label', 'unused-reference-definition', 'unused-reference-definition',
-      'duplicate-reference-definition', 'broken-local-link', 'broken-anchor'],
-    'reference definitions checked for undefined use, unused/duplicate, broken target and anchor');
-  eq(refDefs.map((c) => c.line), [5, 7, 10, 12, 13, 14], 'reference definition candidate lines');
-  ok(refDefs[3].evidence.includes('line 11'), 'duplicate definition evidence points at the first definition');
+    ['duplicate-link-target', 'undefined-reference-label', 'unused-reference-definition',
+      'unused-reference-definition', 'duplicate-reference-definition', 'broken-local-link', 'broken-anchor'],
+    'reference definitions checked for repeated targets, undefined use, unused/duplicate, broken target and anchor');
+  eq(refDefs.map((c) => c.line), [3, 5, 7, 10, 12, 13, 14], 'reference definition candidate lines');
+  ok(refDefs[4].evidence.includes('line 11'), 'duplicate definition evidence points at the first definition');
 
   eq(ofFile('docs/footnote.md'), [], 'footnote definitions and references are not treated as links');
 
@@ -555,6 +575,16 @@ function runAssertions(tmp) {
     'repeated local link targets are reported once per file');
   eq(duplicateLink[0].line, 3, 'duplicate link candidate points at the first occurrence');
   ok(duplicateLink[0].evidence.includes('3 times'), 'duplicate link evidence includes the count');
+
+  const duplicateExtra = ofFile('docs/duplicate-link-target-extra.md');
+  eq(duplicateExtra.map((c) => c.kind), ['duplicate-link-target', 'duplicate-link-target'],
+    'HTML and reference-style links also count toward duplicate targets');
+  eq(duplicateExtra.map((c) => c.line), [3, 11], 'HTML/reference duplicate target lines');
+
+  const outsideRoot = ofFile('repo/docs/links.md');
+  eq(outsideRoot.map((c) => c.kind), ['link-outside-root'],
+    'links escaping the git repository root are reported');
+  eq(outsideRoot[0].line, 5, 'inside-repo link is allowed, outside-root link reported');
 
   const htmlLinks = ofFile('docs/html-links.md');
   eq(htmlLinks.map((c) => c.kind),
