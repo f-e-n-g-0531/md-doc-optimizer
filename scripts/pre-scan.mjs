@@ -10,12 +10,8 @@ const TOOL = 'md-doc-optimizer-pre-scan';
 const SCHEMA_VERSION = 1;
 const BASELINE_TOOL = 'md-doc-optimizer-pre-scan-baseline';
 const BASELINE_SCHEMA_VERSION = 1;
-// near-duplicate：小仓精确两两比较；大仓用 MinHash + LSH 取候选对，再做精确 Jaccard
+// near-duplicate：精确前缀过滤生成候选对，再做精确 Jaccard；--exact-near-duplicates 退回全量两两比较
 const NEAR_DUP_THRESHOLD = 0.8;
-const NEAR_DUP_BRUTE_LIMIT = 50;
-const NEAR_DUP_HASHES = 128;
-const NEAR_DUP_BANDS = 32;
-const NEAR_DUP_ROWS = 4;
 // 行内抑制标记（HTML 注释，不渲染）：只影响候选上报，不影响解析。
 // 允许在标记后写 ": 原因"；按注释边界解析，外层 HTML 注释里的标记字面量不生效。
 const MARKER_DISABLE_BODY_RE = /^pre-scan-disable(?:\s*:[\s\S]*)?$/i;
@@ -802,48 +798,41 @@ function detectLocal(doc, docsByAbs, add) {
   }
 }
 
-// FNV-1a + seed，用于 MinHash
-function hashText(text, seed) {
-  let hash = (2166136261 ^ seed) >>> 0;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619) >>> 0;
-  }
-  return hash;
-}
-
-// 每个文件的行集合 -> MinHash 签名（NEAR_DUP_HASHES 个最小值）
-function minhashSignature(nonEmptyLines) {
-  const seeds = Array.from({ length: NEAR_DUP_HASHES }, (_, i) => Math.imul(i + 1, 0x9e3779b1) >>> 0);
-  const signature = new Array(NEAR_DUP_HASHES).fill(0xffffffff);
-  for (const line of nonEmptyLines) {
-    for (let s = 0; s < NEAR_DUP_HASHES; s++) {
-      const value = hashText(line, seeds[s]);
-      if (value < signature[s]) signature[s] = value;
+// 精确候选对：按全局行频升序排序后取 prefix；Jaccard >= t 时较小集合的 prefix 必与对方共享一行
+function prefixCandidatePairs(listed, sizes) {
+  const docFrequency = new Map();
+  for (const doc of listed) {
+    for (const line of doc.nonEmptyLines) {
+      docFrequency.set(line, (docFrequency.get(line) || 0) + 1);
     }
   }
-  return signature;
-}
-
-// 大仓：按 band 分桶取候选对（LSH），避免 O(n²) 全量比较
-function lshCandidatePairs(listed) {
-  const signatures = listed.map((doc) => minhashSignature(doc.nonEmptyLines));
-  const buckets = new Map();
+  const tokenOrder = new Map();
+  [...docFrequency.entries()]
+    .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .forEach(([line], index) => tokenOrder.set(line, index));
+  const postings = new Map();
   for (let index = 0; index < listed.length; index++) {
-    for (let band = 0; band < NEAR_DUP_BANDS; band++) {
-      const start = band * NEAR_DUP_ROWS;
-      const key = band + ':' + signatures[index].slice(start, start + NEAR_DUP_ROWS).join(',');
-      const bucket = buckets.get(key);
+    for (const line of listed[index].nonEmptyLines) {
+      const bucket = postings.get(line);
       if (bucket) bucket.push(index);
-      else buckets.set(key, [index]);
+      else postings.set(line, [index]);
     }
   }
   const pairs = new Set();
-  for (const bucket of buckets.values()) {
-    for (let i = 0; i < bucket.length; i++) {
-      for (let j = i + 1; j < bucket.length; j++) {
-        const a = Math.min(bucket[i], bucket[j]);
-        const b = Math.max(bucket[i], bucket[j]);
+  for (let index = 0; index < listed.length; index++) {
+    const sortedLines = [...listed[index].nonEmptyLines]
+      .sort((a, b) => tokenOrder.get(a) - tokenOrder.get(b));
+    const prefixLength = Math.max(1,
+      sortedLines.length - Math.ceil(NEAR_DUP_THRESHOLD * sortedLines.length) + 1);
+    for (const line of sortedLines.slice(0, prefixLength)) {
+      for (const other of postings.get(line)) {
+        if (other === index) continue;
+        const a = Math.min(index, other);
+        const b = Math.max(index, other);
+        const minSize = Math.min(sizes[a], sizes[b]);
+        const maxSize = Math.max(sizes[a], sizes[b]);
+        // Jaccard <= minSize / maxSize，超出阈值的尺寸比不可能是候选
+        if (maxSize > minSize / NEAR_DUP_THRESHOLD) continue;
         pairs.add(a + ',' + b);
       }
     }
@@ -858,12 +847,12 @@ function detectNearDuplicates(docs, add, exact) {
   const listed = docs.filter((doc) => doc.nonEmptyLines.size >= 10)
     .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   let pairs = [];
-  if (exact || listed.length <= NEAR_DUP_BRUTE_LIMIT) {
+  if (exact) {
     for (let i = 0; i < listed.length; i++) {
       for (let j = i + 1; j < listed.length; j++) pairs.push([i, j]);
     }
   } else {
-    pairs = lshCandidatePairs(listed);
+    pairs = prefixCandidatePairs(listed, listed.map((doc) => doc.nonEmptyLines.size));
   }
   for (const [i, j] of pairs) {
     const a = listed[i];

@@ -683,7 +683,7 @@ function runAssertions(tmp) {
   ok(fileTargetError !== null, 'file (non-directory) target exits non-zero');
   eq(fileTargetError.status, 2, 'file target exit code 2');
 
-  // ---- 大仓 near-duplicate：MinHash + LSH 路径 ----
+  // ---- 大仓 near-duplicate：精确前缀过滤路径 ----
   const manyNearDir = join(tmp, 'many-near');
   mkdirSync(manyNearDir, { recursive: true });
   const lshSharedLines = Array.from({ length: 12 }, (_, i) => 'shared body line ' + i);
@@ -698,15 +698,18 @@ function runAssertions(tmp) {
   eq(manyRun.status, 0, 'large corpus scan exits 0');
   const manyResult = JSON.parse(manyRun.stdout);
   const manyNear = manyResult.candidates.filter((candidate) => candidate.kind === 'near-duplicate-files');
-  eq(manyNear.length, 1, 'LSH finds the single near-duplicate pair among 60 files');
+  eq(manyNear.length, 1, 'prefix filter finds the single near-duplicate pair among 60 files');
   eq(manyNear[0].file, 'a.md', 'near-duplicate reported at the lexicographically smaller file');
   ok(manyNear[0].evidence.includes('b.md'), 'near-duplicate evidence names the paired file');
   ok(manyNear[0].evidence.includes('0.87'), 'near-duplicate evidence keeps the exact Jaccard');
   const manyExactRun = spawnSync(process.execPath,
     [scriptPath, manyNearDir, '--exact-near-duplicates'], { encoding: 'utf8' });
   eq(manyExactRun.status, 0, '--exact-near-duplicates scan exits 0');
-  eq(JSON.parse(manyExactRun.stdout).candidates.filter((c) => c.kind === 'near-duplicate-files').length, 1,
+  const manyExactResult = JSON.parse(manyExactRun.stdout);
+  eq(manyExactResult.candidates.filter((c) => c.kind === 'near-duplicate-files').length, 1,
     'exact near-duplicate mode also finds the pair');
+  eq(manyExactResult.candidates, manyResult.candidates,
+    'prefix-filter output matches brute-force exact output');
 
   // ---- --fail-on 门禁 ----
   const cleanDir = join(tmp, 'clean');

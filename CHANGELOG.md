@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.15.0 (2026-10-20)
+
+- near-duplicate 改为精确算法：按全局行频取 prefix 的精确前缀过滤生成候选对，再做精确 Jaccard；不再依赖 MinHash+LSH 近似召回。`--exact-near-duplicates` 保留为全量两两对拍。
+- 自测断言 1076：默认前缀过滤与全量精确模式在 60 文件夹具上输出完全一致。
+- 同步更新 references/tool-configs.md、README、SKILL.md；版本号升至 1.15.0。
+
 ## 1.14.1 (2026-10-20)
 
 - 修复块上下文边界：多行 HTML 注释结束后紧跟的 4 空格缩进代码现在也能识别（此前会被当成正文扫描）；补自测。
