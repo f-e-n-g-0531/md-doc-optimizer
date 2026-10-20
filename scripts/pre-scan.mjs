@@ -240,7 +240,10 @@ function analyzeFile(absPath, targetAbs) {
       continue;
     }
     if (fenceCommentOpen) {
-      if (maskInlineCode(line).includes('-->')) fenceCommentOpen = false;
+      if (maskInlineCode(line).includes('-->')) {
+        fenceCommentOpen = false;
+        canStartIndentedCode = true;
+      }
       continue; // 注释内容不是 Markdown，不参与围栏判断
     }
     // 缩进代码块（近似块上下文）：4 空格/tab 缩进、前一行为空/文件开头，且不在列表续行内。

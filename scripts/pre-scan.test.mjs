@@ -210,6 +210,9 @@ function runAssertions(tmp) {
     'TODO: reported.', '',
     '`<!-- pre-scan-ignore -->` TODO: reported too.', '',
   ].join('\n'));
+  addFile('docs/indented-after-comment.md',
+    '# Comment Then Code\n\n<!--\nnote\n-->\n    [bad after comment](./nope-after-comment.md)\n\n' +
+    '[visible](./valid.md)\n');
   addFile('docs/indented-after-html.md',
     '# HTML Block Then Code\n\n<pre>\nraw\n</pre>\n    [bad after pre](./nope-after-pre.md)\n\n' +
     '[visible](./valid.md)\n');
@@ -516,6 +519,7 @@ function runAssertions(tmp) {
   eq(indentedCode.map((c) => c.line), [6, 10, 14], 'indented code candidate lines');
   eq(ofFile('docs/indented-after-heading.md'), [], 'indented code right after headings is ignored');
   eq(ofFile('docs/indented-after-html.md'), [], 'indented code right after raw HTML blocks is ignored');
+  eq(ofFile('docs/indented-after-comment.md'), [], 'indented code right after multi-line HTML comments is ignored');
 
   const setext = ofFile('docs/setext.md');
   eq(setext, [], 'setext headings produce usable anchors');
