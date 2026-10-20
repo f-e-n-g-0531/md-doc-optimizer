@@ -94,6 +94,7 @@
         "case-mismatch-link",
         "default-branch-master-link",
         "duplicate-heading",
+        "duplicate-link-target",
         "duplicate-paragraph",
         "duplicate-reference-definition",
         "empty-link-target",
@@ -253,6 +254,25 @@
             "properties": {
               "kind": {
                 "const": "duplicate-heading"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "A"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "duplicate-link-target"
               }
             },
             "required": [

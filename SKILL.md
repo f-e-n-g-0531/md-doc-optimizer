@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.15.0"
+  version: "1.16.0"
 ---
 
 # Markdown 文档优化器
@@ -160,7 +160,7 @@ metadata:
 
 | 目标 | 工具 | 作用 |
 |---|---|---|
-| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点（含原始 HTML 内链、setext 标题）、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、疑似生成副本；只报候选；`--fail-on` 可直接做 CI 门禁（默认跳过测试夹具），`--baseline`（配合 `--fail-on`）可只拦新增；`--exact-near-duplicates` 可全量对拍相似度；支持行内抑制标记 |
+| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点（含原始 HTML 内链、setext 标题）、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、重复链接目标、疑似生成副本；只报候选；`--fail-on` 可直接做 CI 门禁（默认跳过测试夹具），`--baseline`（配合 `--fail-on`）可只拦新增；`--exact-near-duplicates` 可全量对拍相似度；`--report-out` 可输出报告草稿；支持行内抑制标记 |
 | 结构去重 | markdownlint / remark-lint | MD024 重复标题、MD025 多 H1、未使用定义等 |
 | 文风/冗余 | Vale + write-good/proselint/alex | 口水词、被动语态、客套、歧视用语 |
 | 链接失效 | lychee、markdown-link-check | 找 404/死链/锚点失效 |

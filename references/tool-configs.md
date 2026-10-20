@@ -173,9 +173,12 @@ node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link,broken-anch
 node scripts/pre-scan.mjs <目标目录> --write-baseline .pre-scan-baseline.json    # 记录当前候选为基线
 node scripts/pre-scan.mjs <目标目录> --fail-on broken-local-link --baseline .pre-scan-baseline.json  # 只拦新增
 node scripts/pre-scan.mjs <目标目录> --exact-near-duplicates  # near-duplicate 全量两两对拍
+node scripts/pre-scan.mjs <目标目录> --report-out draft.json  # 输出报告草稿（report.schema.json）
 ~~~
 
 `--text` 每行按 `file:line [类别] kind -- evidence | 原文` 输出：`evidence` 是命中的具体词或路径（例如同一行里的「目前」「最近」会分别列出），便于逐条 triage。
+
+`--report-out <file>` 把候选转成 references/report.schema.json 兼容的报告草稿：每条 finding 的 `action=annotate`（等待 P3 triage），`severity` 按 kind 映射（死链/图片/锚点/空目标=High；大小写/未定义引用/硬编码分支/时间词/近重复=Medium；其余=Low），`summary` 中 examined/needs_human 为候选数、fixed/no_action 为 0。它只是 P2→P3 的草稿，不是已完成审计。
 
 `--fail-on <kind,...>` 是 CI 门禁：命中指定 kind 时退出码为 1，匹配项写到 stderr（最多 20 条明细，其余以 `... and N more` 提示，完整列表看 stdout JSON）；stdout 仍输出完整 JSON/文本，便于同时存档。**默认跳过 `context=fixture` 的候选**（测试夹具里的坏链接是内容本身），需要时加 `--include-fixtures`。kind 用逗号分隔、不能有空项；未知 kind 或空项按用法错误退出 2。退出码：**0 成功、1 门禁命中、2 用法错误**。仅跳过 fixture 时也会在 stderr 写一行跳过计数（退出码仍是 0）；门禁明细里的 fixture 候选会标 `[fixture]`。
 
@@ -225,6 +228,7 @@ node scripts/pre-scan.mjs <目标目录> --exact-near-duplicates  # near-duplica
 | multiple-h1 | A | 一个文件多个一级标题 |
 | unused-reference-definition | A | 引用定义 `[label]: url` 从未被引用 |
 | duplicate-reference-definition | A | 同一引用标签重复定义，后一条会被忽略 |
+| duplicate-link-target | A | 同一本地链接目标在单文件中出现 >= 3 次（内联链接；锚点/外部链接不计） |
 | near-duplicate-files | A | 两个文件行集合高度相似，疑似拷贝或生成副本 |
 
 输出结构：`{tool, schema_version, target, files_scanned, candidates[], summary{total, by_kind, by_category}}`；candidates 按 file/line/kind 排序，便于 diff。
@@ -310,6 +314,8 @@ jobs:
         run: |
           node scripts/pre-scan.mjs . > "$RUNNER_TEMP/pre-scan-out.json"
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/pre-scan.schema.json -d "$RUNNER_TEMP/pre-scan-out.json"
+          node scripts/pre-scan.mjs . --report-out "$RUNNER_TEMP/pre-scan-report.json" > "$RUNNER_TEMP/pre-scan-report-scan.json"
+          npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "$RUNNER_TEMP/pre-scan-report.json"
           node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,case-mismatch-link,empty-link-target,undefined-reference-label
 
       # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/*.json）

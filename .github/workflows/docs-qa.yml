@@ -49,6 +49,8 @@ jobs:
         run: |
           node scripts/pre-scan.mjs . > "$RUNNER_TEMP/pre-scan-out.json"
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/pre-scan.schema.json -d "$RUNNER_TEMP/pre-scan-out.json"
+          node scripts/pre-scan.mjs . --report-out "$RUNNER_TEMP/pre-scan-report.json" > "$RUNNER_TEMP/pre-scan-report-scan.json"
+          npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "$RUNNER_TEMP/pre-scan-report.json"
           node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,case-mismatch-link,empty-link-target,undefined-reference-label
 
       - name: validate report schema

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // md-doc-optimizer 预扫描（pre-scan）：只读扫描目标目录下的 Markdown，输出确定性候选清单。
 // 用法：node scripts/pre-scan.mjs [target-dir] [--text] [--fail-on kind1,kind2] [--include-fixtures]
-//                              [--baseline file] [--write-baseline file] [--exact-near-duplicates]
+//                              [--baseline file] [--write-baseline file] [--report-out file]
+//                              [--exact-near-duplicates]
 // 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法错误
 import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, dirname, parse } from 'node:path';
@@ -12,6 +13,18 @@ const BASELINE_TOOL = 'md-doc-optimizer-pre-scan-baseline';
 const BASELINE_SCHEMA_VERSION = 1;
 // near-duplicate：精确前缀过滤生成候选对，再做精确 Jaccard；--exact-near-duplicates 退回全量两两比较
 const NEAR_DUP_THRESHOLD = 0.8;
+// 同一本地链接目标在单个文件出现 >= 3 次视为冗余候选
+const DUPLICATE_LINK_THRESHOLD = 3;
+// --report-out 的候选严重度映射（action 固定 annotate，等待人工 triage）
+const REPORT_SEVERITY = {
+  'broken-local-link': 'High', 'broken-local-image': 'High', 'broken-anchor': 'High',
+  'empty-link-target': 'High', 'case-mismatch-link': 'Medium', 'undefined-reference-label': 'Medium',
+  'default-branch-master-link': 'Medium', 'stale-time-phrase': 'Medium',
+  'trailing-fullwidth-after-url': 'Low', 'placeholder-marker': 'Low',
+  'duplicate-heading': 'Low', 'duplicate-paragraph': 'Low', 'multiple-h1': 'Low',
+  'near-duplicate-files': 'Medium', 'unused-reference-definition': 'Low',
+  'duplicate-reference-definition': 'Low', 'duplicate-link-target': 'Low',
+};
 // 行内抑制标记（HTML 注释，不渲染）：只影响候选上报，不影响解析。
 // 允许在标记后写 ": 原因"；按注释边界解析，外层 HTML 注释里的标记字面量不生效。
 const MARKER_DISABLE_BODY_RE = /^pre-scan-disable(?:\s*:[\s\S]*)?$/i;
@@ -29,7 +42,7 @@ const CATEGORY = {
   'default-branch-master-link': 'B', 'empty-link-target': 'B', 'undefined-reference-label': 'B',
   'trailing-fullwidth-after-url': 'C', 'stale-time-phrase': 'B', 'placeholder-marker': 'B',
   'duplicate-heading': 'A', 'duplicate-paragraph': 'A', 'multiple-h1': 'A', 'near-duplicate-files': 'A',
-  'unused-reference-definition': 'A', 'duplicate-reference-definition': 'A',
+  'unused-reference-definition': 'A', 'duplicate-reference-definition': 'A', 'duplicate-link-target': 'A',
 };
 
 // 长短语在前，命中区间重叠时只保留第一个（避免 coming soon 再报一次 soon）
@@ -668,6 +681,7 @@ function detectLocal(doc, docsByAbs, add) {
   }
 
   // 1) 链接 / 锚点 / 硬编码 master 分支 / URL 后贴全角标点
+  const duplicateTargets = new Map(); // 本地内联链接目标 -> { count, lines }
   for (let i = 0; i < lines.length; i++) {
     if (doc.ignored[i]) continue;
     const lineNo = i + 1;
@@ -683,7 +697,15 @@ function detectLocal(doc, docsByAbs, add) {
     }
     for (const m of remaining.matchAll(LINK_RE)) {
       if (/^["']/.test(m[4]) && m[3].length > 0) continue; // 空目标 + 标题，交给 EMPTY_TARGET_RE
-      checkLink(lineNo, m[4], { image: m[1] === '!' });
+      const isImage = m[1] === '!';
+      checkLink(lineNo, m[4], { image: isImage });
+      const suppressedLine = doc.suppressed && doc.suppressed.has(lineNo - 1);
+      if (!isImage && !suppressedLine && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(m[4])) {
+        const entry = duplicateTargets.get(m[4]) || { count: 0, lines: [] };
+        entry.count += 1;
+        entry.lines.push(lineNo);
+        duplicateTargets.set(m[4], entry);
+      }
     }
     for (const m of masked.matchAll(EMPTY_TARGET_RE)) {
       add(doc, lineNo, 'empty-link-target',
@@ -707,6 +729,15 @@ function detectLocal(doc, docsByAbs, add) {
     if (glued.size > 0) {
       add(doc, lineNo, 'trailing-fullwidth-after-url', 'full-width punctuation likely glued into URL');
     }
+  }
+
+  // 1.0.1) 同一本地链接目标在单文件重复出现（含锚点等不同后缀时按原文区分）
+  for (const [target, entry] of duplicateTargets) {
+    if (entry.count < DUPLICATE_LINK_THRESHOLD) continue;
+    const visibleLine = entry.lines.find((line) => !(doc.suppressed && doc.suppressed.has(line - 1)));
+    if (!visibleLine) continue;
+    add(doc, visibleLine, 'duplicate-link-target',
+      'same link target appears ' + entry.count + ' times in this file: ' + target);
   }
 
   // 1.1) 引用式定义：目标有效性 / 空目标 / 重复定义 / 未被引用；以及引用了不存在的定义
@@ -955,6 +986,37 @@ function writeBaseline(file, result) {
   return entries.length;
 }
 
+// 把候选转成 references/report.schema.json 兼容的报告草稿（action=annotate，等待 P3 triage）
+function writeReport(file, result) {
+  const absPath = resolve(file);
+  const findings = result.candidates.map((candidate) => ({
+    file: candidate.file,
+    line: candidate.line,
+    category: candidate.category,
+    severity: REPORT_SEVERITY[candidate.kind] || 'Medium',
+    action: 'annotate',
+    excerpt: candidate.excerpt.slice(0, 120),
+    evidence: candidate.evidence,
+  }));
+  const payload = {
+    summary: {
+      files_audited: result.files_scanned,
+      examined: findings.length,
+      fixed: 0,
+      needs_human: findings.length,
+      no_action: 0,
+    },
+    findings: findings,
+  };
+  try {
+    mkdirSync(dirname(absPath), { recursive: true });
+    writeFileSync(absPath, JSON.stringify(payload, null, 2) + '\n');
+  } catch (err) {
+    usageError('cannot write report file: ' + absPath + ' (' + err.message + ')');
+  }
+  return findings.length;
+}
+
 // --fail-on 命中时把新增（未被 baseline 记录）的匹配项写到 stderr 并返回 1；
 // stdout 的 JSON/文本输出保持不变。默认跳过 fixture 上下文（测试夹具里的坏链接是内容本身）。
 function evaluateGate(result, failOn, includeFixtures, baselineKeys) {
@@ -1017,6 +1079,7 @@ function main() {
   let exactNearDuplicates = false;
   let baselinePath = null;
   let writeBaselinePath = null;
+  let reportOutPath = null;
   const failOn = new Set();
   const positional = [];
   for (let i = 0; i < args.length; i++) {
@@ -1078,6 +1141,18 @@ function main() {
       }
       if (!value || value.startsWith('-')) usageError('--write-baseline requires a file path');
       writeBaselinePath = value;
+      continue;
+    }
+    if (arg === '--report-out' || arg.startsWith('--report-out=')) {
+      let value;
+      if (arg === '--report-out') {
+        value = args[++i];
+        if (value === undefined) usageError('--report-out requires a file path');
+      } else {
+        value = arg.slice('--report-out='.length);
+      }
+      if (!value || value.startsWith('-')) usageError('--report-out requires a file path');
+      reportOutPath = value;
       continue;
     }
     if (arg.startsWith('-') && arg !== '-') usageError('unknown option: ' + arg);
@@ -1161,22 +1236,24 @@ function main() {
     summary: { total: sorted.length, by_kind: byKindSorted, by_category: byCategory },
   };
 
+  let reportCount = null;
+  if (reportOutPath !== null) reportCount = writeReport(reportOutPath, result);
+  let baselineCount = null;
+  if (writeBaselinePath !== null) baselineCount = writeBaseline(writeBaselinePath, result);
+  if (textMode) {
+    process.stdout.write(renderText(result));
+  } else {
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  }
+  if (reportCount !== null) {
+    process.stderr.write('pre-scan: wrote ' + reportCount + ' finding(s) to report ' +
+      toPosix(resolve(reportOutPath)) + '\n');
+  }
   if (writeBaselinePath !== null) {
-    const count = writeBaseline(writeBaselinePath, result);
-    if (textMode) {
-      process.stdout.write(renderText(result));
-    } else {
-      process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-    }
-    process.stderr.write('pre-scan: wrote ' + count + ' candidate(s) to baseline ' +
+    process.stderr.write('pre-scan: wrote ' + baselineCount + ' candidate(s) to baseline ' +
       toPosix(resolve(writeBaselinePath)) + '\n');
     process.exitCode = 0;
   } else {
-    if (textMode) {
-      process.stdout.write(renderText(result));
-    } else {
-      process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-    }
     process.exitCode = evaluateGate(result, failOn, includeFixtures, baselineKeys);
   }
 }

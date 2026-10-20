@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.0 (2026-10-20)
+
+- 新增候选类型 `duplicate-link-target`（A）：同一本地内联链接目标在单文件出现 >= 3 次时报告，缩小「链接冗余」盲区；锚点/外部链接与被抑制行不计。
+- 新增 `--report-out <file>`：把候选转成 references/report.schema.json 兼容的报告草稿（action=annotate、severity 按 kind 映射、summary 计数），作为 P2→P3 的交接产物；CI 用 ajv 校验该草稿。
+- CI 的 pre-scan 契约步骤同步增加 report-out 生成与 report.schema.json 校验；tool-configs 模板保持一致。
+- 自测断言增至 1660（含逐 finding 校验报告草稿结构、重复链接目标、写入失败输出约定）。
+- 同步更新 references/tool-configs.md、README、SKILL.md；版本号升至 1.16.0。
+
 ## 1.15.0 (2026-10-20)
 
 - near-duplicate 改为精确算法：按全局行频取 prefix 的精确前缀过滤生成候选对，再做精确 Jaccard；不再依赖 MinHash+LSH 近似召回。`--exact-near-duplicates` 保留为全量两两对拍。

@@ -19,6 +19,7 @@ const ALLOWED_KINDS = [
   'undefined-reference-label',
   'unused-reference-definition',
   'duplicate-reference-definition',
+  'duplicate-link-target',
   'default-branch-master-link',
   'trailing-fullwidth-after-url',
   'stale-time-phrase',
@@ -37,6 +38,7 @@ const CATEGORY_OF = {
   'undefined-reference-label': 'B',
   'unused-reference-definition': 'A',
   'duplicate-reference-definition': 'A',
+  'duplicate-link-target': 'A',
   'default-branch-master-link': 'B',
   'trailing-fullwidth-after-url': 'C',
   'stale-time-phrase': 'B',
@@ -249,6 +251,19 @@ function runAssertions(tmp) {
   addFile('docs/a&b.md', '# A and B\n\nTarget file with an ampersand.\n');
   addFile('docs/html-entities.md',
     '# Entities\n\n[plain](./a&b.md)\n\n<a href="./a&amp;b.md">html</a>\n');
+  addFile('docs/duplicate-link-target.md', [
+    '# Dup Links', '',
+    '[one](./valid.md)', '',
+    '[two](./valid.md)', '',
+    '[three](./valid.md)', '',
+    '[anchor](#dup-links)', '',
+    '[anchor2](#dup-links)', '',
+    '[anchor3](#dup-links)', '',
+    '[ext](https://example.com/x)', '',
+    '[ext2](https://example.com/x)', '',
+    '[twice](./valid-only.md)', '',
+    '[twice again](./valid-only.md)', '',
+  ].join('\n'));
   addFile('docs/html-links.md',
     '# HTML Links\n\n' +
     '<a href="./missing-html.md">bad</a>\n\n' +
@@ -535,6 +550,12 @@ function runAssertions(tmp) {
 
   eq(ofFile('docs/html-entities.md'), [], 'HTML attribute entities are decoded before path checks');
 
+  const duplicateLink = ofFile('docs/duplicate-link-target.md');
+  eq(duplicateLink.map((c) => c.kind), ['duplicate-link-target'],
+    'repeated local link targets are reported once per file');
+  eq(duplicateLink[0].line, 3, 'duplicate link candidate points at the first occurrence');
+  ok(duplicateLink[0].evidence.includes('3 times'), 'duplicate link evidence includes the count');
+
   const htmlLinks = ofFile('docs/html-links.md');
   eq(htmlLinks.map((c) => c.kind),
     ['broken-local-link', 'broken-anchor', 'broken-local-image', 'case-mismatch-link'],
@@ -710,6 +731,33 @@ function runAssertions(tmp) {
     'exact near-duplicate mode also finds the pair');
   eq(manyExactResult.candidates, manyResult.candidates,
     'prefix-filter output matches brute-force exact output');
+
+  // ---- --report-out 报告草稿 ----
+  const reportPath = join(tmp, 'draft-report.json');
+  const reportRun = spawnSync(process.execPath, [scriptPath, tmp, '--report-out', reportPath], { encoding: 'utf8' });
+  eq(reportRun.status, 0, '--report-out exits 0');
+  ok(reportRun.stderr.includes('finding(s) to report'), '--report-out prints a summary');
+  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  const reportScan = JSON.parse(reportRun.stdout);
+  eq(report.summary.files_audited, reportScan.files_scanned, 'report files_audited matches scan');
+  eq(report.summary.examined, reportScan.candidates.length, 'report examined matches candidates');
+  eq(report.summary.fixed, 0, 'report draft has fixed=0');
+  eq(report.summary.needs_human, reportScan.candidates.length, 'report draft marks all as needs_human');
+  eq(report.summary.no_action, 0, 'report draft has no_action=0');
+  eq(report.findings.length, reportScan.candidates.length, 'report findings match candidate count');
+  for (const finding of report.findings) {
+    ok(typeof finding.file === 'string' && finding.file.length > 0, 'report finding has file');
+    ok(Number.isInteger(finding.line) && finding.line >= 1, 'report finding has line');
+    ok(['A', 'B', 'C'].includes(finding.category), 'report finding category is A/B/C');
+    ok(['Critical', 'High', 'Medium', 'Low'].includes(finding.severity), 'report finding has severity');
+    eq(finding.action, 'annotate', 'report finding action is annotate');
+    ok(typeof finding.evidence === 'string' && finding.evidence.length > 0, 'report finding has evidence');
+    ok(typeof finding.excerpt === 'string' && finding.excerpt.length <= 120, 'report excerpt <= 120 chars');
+  }
+  const reportWriteFailure = spawnSync(process.execPath,
+    [scriptPath, tmp, '--report-out', tmp], { encoding: 'utf8' });
+  eq(reportWriteFailure.status, 2, 'report write failure exits 2');
+  eq(reportWriteFailure.stdout, '', 'report write failure produces no stdout');
 
   // ---- --fail-on 门禁 ----
   const cleanDir = join(tmp, 'clean');
