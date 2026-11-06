@@ -21,12 +21,14 @@
 
 ## 2. JSON 契约
 
+以下示例表示审查一份文件并已落实一处删除；报告模式下 `fixed` 应记 0。
+
 ~~~json
 {
   "summary": {
-    "files_audited": 0,
-    "examined": 0,
-    "fixed": 0,
+    "files_audited": 1,
+    "examined": 1,
+    "fixed": 1,
     "needs_human": 0,
     "no_action": 0
   },
@@ -48,7 +50,7 @@
 约束：
 
 - 无问题时 `findings` 为空数组，`summary.fixed` 与 `summary.needs_human` 均为 0，并用一句话说明 NO_ISSUES。
-- 同一行有多个问题合并为一条 finding，证据列全。
+- 正式报告中，同一行有多个问题合并为一条 finding，证据列全；`--report-out` 草稿暂按候选逐条保留，待 P3 核对后合并。
 - `evidence` 禁止「我觉得 / 可能 / 大概」式表述，必须是路径、命令、提交号或 URL。
 - 行号以审计时的文件内容为准；文件已被改动时重新定位后再输出。
 - 报告模式（只报告不改）下 `fixed` 记 0：`action` 为 `replace`/`delete` 表示建议改法，`replacement` 给出建议文本；用户确认落地后，再把对应条目标为已修并计入 `fixed`。
@@ -72,7 +74,7 @@ Schema 强制约束：`summary` 五个计数字段必填；每条 finding 的 `f
 3. 更新报告 JSON：已落地条目计入 `summary.fixed`；用户拒绝的改成 `action=keep` 并在 `evidence` 写明原因；仍待确认的保持 `annotate`。
 4. 用第 5 节的 PR/commit 模板交付；PR 描述里给出「原句 → 新句 → 证据」。
 
-预扫脚本（scripts/pre-scan.mjs）的输出只是 P3 的输入候选，不是 findings；逐条核对后才写入报告。
+预扫脚本（scripts/pre-scan.mjs）的默认输出只是 P3 的输入候选，不是正式 findings；`--report-out` 将候选转换为 `action=annotate` 的报告草稿，其中 `examined` 暂记候选数、`needs_human` 记全部候选。逐条核对、合并并更新计数后，才能作为正式报告交付。
 
 ## 3. NEEDS_HUMAN 写法
 
@@ -98,8 +100,8 @@ NEEDS_HUMAN: README 声称支持 --legacy 参数
 
 | 严重度 | 定义 | 报告模式 | 直接修改模式 |
 |---|---|---|---|
-| Critical | 误导用户做危险或错误操作，或安全、金钱、法律事实错误 | 置顶 | 立即修 |
-| High | 事实矛盾、失效主链接、不可运行的核心命令 | 列出 | 修 |
+| Critical | 误导用户做危险或错误操作，安全、金钱、法律事实错误，失效主链接、不可运行的核心命令 | 置顶 | 立即修 |
+| High | 事实矛盾、过时版本或命令、关键段落重复 | 列出 | 修 |
 | Medium | 冗余表达、失效次要链接、陈旧示例 | 列出 | 修或标注 |
 | Low | 口水词、风格性重复、格式不一致 | 列出 | 仅「彻底」模式处理 |
 

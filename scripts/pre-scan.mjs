@@ -3,9 +3,10 @@
 // 用法：node scripts/pre-scan.mjs [target-dir] [--text] [--fail-on kind1,kind2] [--include-fixtures]
 //                              [--baseline file] [--write-baseline file] [--report-out file]
 //                              [--exact-near-duplicates]
-// 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法错误
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, resolve, relative, dirname, parse } from 'node:path';
+// 默认扫描当前目录；退出码 0 成功、1 --fail-on 命中、2 用法或文件读写错误
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
+import { join, resolve, relative, dirname, parse, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const TOOL = 'md-doc-optimizer-pre-scan';
 const SCHEMA_VERSION = 1;
@@ -50,9 +51,10 @@ const CATEGORY = {
 const STALE_RE = /by the end of \d{4}|\bin the near future\b|\bcoming soon\b|\bnext quarter\b|\bcurrently\b|\brecently\b|\bthis year\b|\bsoon\b|目前|最近|近期|即将|不久后/gi;
 const PLACEHOLDER_RE = /\bTODO\b|\bFIXME\b|\bTBD\b|待补充|待完善|\bcoming soon\b|\bstay tuned\b/gi;
 // 链接文字允许一层嵌套方括号：![alt [x]](img)、[see [inner][label]](url)
-const LINK_RE = /(!?)\[((?:[^\[\]\n]|\[[^\[\]\n]*\])*)\]\((\s*)<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+// 链接目标允许尖括号包裹或平衡圆括号（CommonMark），如 ./faq(1).md，避免在 ) 处截断误报；括号按一层嵌套识别，更深的嵌套目标保守跳过不报
+const LINK_RE = /(!?)\[((?:[^\[\]\n]|\[[^\[\]\n]*\])*)\]\((\s*)(<[^>\n]*>|(?:[^()\s>]|\([^()\s>]*\))*)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
 // 图片作为链接文字（常见徽章写法）：[![alt](img)](link)
-const NESTED_IMAGE_LINK_RE = /\[(!\[[^\]\n]*\]\([^)\n]*\))\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+const NESTED_IMAGE_LINK_RE = /\[(!\[[^\]\n]*\]\((?:[^()\n]|\([^()\n]*\))*\))\]\(\s*(<[^>\n]*>|(?:[^()\s>]|\([^()\s>]*\))*)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
 // 引用式定义：可位于 blockquote / 列表项内；脚注 [^1]: ... 也会被匹配，解析时再排除
 const REF_DEF_RE = /^\s{0,3}(?:(?:>\s{0,3})|(?:[-*+]|\d+[.)])\s+)*\[([^\]]+)\]:\s*(.*)$/;
 // 引用式使用：完整 [text][label]、折叠 [label][]、快捷 [label]；快捷形式歧义大，只用于「定义是否被使用」
@@ -106,6 +108,38 @@ function usageError(message) {
 
 const toPosix = (p) => p.replace(/\\/g, '/');
 
+// 输出文件必须互不覆盖，也不能覆盖 Markdown、脚本或输入基线。
+function canonicalPath(file) {
+  const abs = resolve(file);
+  if (existsSync(abs)) return realpathSync(abs);
+  const parent = dirname(abs);
+  return parent === abs ? abs : join(canonicalPath(parent), basename(abs));
+}
+function sameFile(a, b) {
+  if (canonicalPath(a) === canonicalPath(b)) return true;
+  if (!existsSync(a) || !existsSync(b)) return false;
+  const left = statSync(a);
+  const right = statSync(b);
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function validateOutputs(reportPath, baselineOutPath, baselineInputPath) {
+  const outputs = [reportPath, baselineOutPath].filter((file) => file !== null);
+  for (const file of outputs) {
+    if (MD_EXT.test(file) || MD_EXT.test(canonicalPath(file))) {
+      usageError('output must not overwrite Markdown: ' + file);
+    }
+    if (sameFile(file, fileURLToPath(import.meta.url))) {
+      usageError('output must not overwrite scanner: ' + file);
+    }
+    if (baselineInputPath !== null && sameFile(file, baselineInputPath)) {
+      usageError('output must not overwrite input baseline: ' + file);
+    }
+  }
+  if (outputs.length === 2 && sameFile(outputs[0], outputs[1])) {
+    usageError('--report-out and --write-baseline must use different files');
+  }
+}
+
 // context: 测试夹具目录 / example- 开头的文件名算 fixture，其余算 docs
 function contextOf(relFile) {
   const parts = relFile.split('/');
@@ -123,7 +157,7 @@ function collectFiles(targetAbs) {
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (err) {
-      return;
+      usageError('cannot read directory: ' + dir + ' (' + err.message + ')');
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
@@ -192,7 +226,7 @@ function stripContainerPrefix(line) {
 
 // 标题先取渲染文本（去 HTML 标签、链接语法、行内代码标记），再解码实体，最后算 slug
 function headingPlainText(raw) {
-  const rendered = raw.replace(/<[^>]*>/g, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`/g, '').trim();
+  const rendered = raw.replace(/<[^>]*>/g, '').replace(/!?\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, '$1').replace(/`/g, '').trim();
   return decodeEntities(rendered).trim();
 }
 
@@ -227,7 +261,7 @@ function analyzeFile(absPath, targetAbs) {
   try {
     content = readFileSync(absPath, 'utf8');
   } catch (err) {
-    return null;
+    usageError('cannot read Markdown file: ' + absPath + ' (' + err.message + ')');
   }
   content = content.replace(/^\uFEFF/, ''); // 兼容 UTF-8 BOM
   const lines = content.split(/\r\n|\r|\n/); // 兼容 CRLF / CR
@@ -568,16 +602,9 @@ function analyzeFile(absPath, targetAbs) {
   };
 }
 
-// 文本中互不重叠的短语命中（返回原文短语，便于写 evidence）
+// matchAll 按顺序返回互不重叠的匹配；alternation 的优先级已由正则定义。
 function phraseHits(text, re) {
-  const hits = [];
-  for (const m of text.matchAll(re)) {
-    const start = m.index;
-    const end = start + m[0].length;
-    if (hits.some((hit) => start < hit.end && end > hit.start)) continue;
-    hits.push({ start: start, end: end, phrase: m[0] });
-  }
-  return hits.map((hit) => hit.phrase);
+  return Array.from(text.matchAll(re), (match) => match[0]);
 }
 
 // 目录名缓存：大小写核对要逐段 readdir，避免同一目录重复读取
@@ -663,7 +690,7 @@ function detectLocal(doc, docsByAbs, add) {
     const absTarget = resolve(dirname(doc.absPath), unescapedPath);
     if (doc.repoRoot) {
       const relToRoot = relative(doc.repoRoot, absTarget);
-      if (relToRoot.startsWith('..') || parse(relToRoot).root) {
+      if (relToRoot === '..' || relToRoot.startsWith('../') || relToRoot.startsWith('..\\') || parse(relToRoot).root) {
         add(doc, lineNo, 'link-outside-root',
           (isImage ? 'relative image' : 'relative link') + ' escapes repository root: ' + pathPart);
         return;
@@ -735,7 +762,7 @@ function detectLocal(doc, docsByAbs, add) {
     // 先处理「图片作为链接文字」：[![alt](img)](url)，内外两层都要核对
     let remaining = masked;
     for (const nested of masked.matchAll(NESTED_IMAGE_LINK_RE)) {
-      const inner = nested[1].match(/^(!?)\[([^\]\n]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)$/);
+      const inner = nested[1].match(/^(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]*>|(?:[^()\s>]|\([^()\s>]*\))*)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)$/);
       if (inner) checkLink(lineNo, inner[3], { image: true });
       checkLink(lineNo, nested[2], { image: false });
       remaining = remaining.slice(0, nested.index) + ' '.repeat(nested[0].length) +
@@ -744,8 +771,9 @@ function detectLocal(doc, docsByAbs, add) {
     for (const m of remaining.matchAll(LINK_RE)) {
       if (/^["']/.test(m[4]) && m[3].length > 0) continue; // 空目标 + 标题，交给 EMPTY_TARGET_RE
       const isImage = m[1] === '!';
-      checkLink(lineNo, m[4], { image: isImage });
-      if (!isImage) recordDuplicateTarget(lineNo, m[4]);
+      const target = m[4].trim().replace(/^<|>$/g, ''); // 与 checkLink 同序归一，重复统计/核对一致
+      checkLink(lineNo, target, { image: isImage });
+      if (!isImage) recordDuplicateTarget(lineNo, target);
     }
     for (const m of masked.matchAll(EMPTY_TARGET_RE)) {
       add(doc, lineNo, 'empty-link-target',
@@ -830,15 +858,13 @@ function detectLocal(doc, docsByAbs, add) {
   }
 
   // 3) 重复标题（同层级同文本，大小写与空白归一）与多个 H1
-  const headingGroups = new Map();
+  const firstHeadingLine = new Map();
   for (const heading of doc.headings) {
     const key = heading.level + '|' + heading.text.toLowerCase().replace(/\s+/g, ' ').trim();
-    if (!headingGroups.has(key)) headingGroups.set(key, []);
-    headingGroups.get(key).push(heading);
-  }
-  for (const group of headingGroups.values()) {
-    for (let i = 1; i < group.length; i++) {
-      add(doc, group[i].line, 'duplicate-heading', 'repeat of heading at line ' + group[0].line);
+    if (firstHeadingLine.has(key)) {
+      add(doc, heading.line, 'duplicate-heading', 'repeat of heading at line ' + firstHeadingLine.get(key));
+    } else {
+      firstHeadingLine.set(key, heading.line);
     }
   }
   const h1s = doc.headings.filter((heading) => heading.level === 1);
@@ -847,7 +873,7 @@ function detectLocal(doc, docsByAbs, add) {
   }
 
   // 4) 重复段落（空行分隔，空白归一后 >= 80 字符，排除纯标题/纯列表块）
-  const blocks = [];
+  const firstParagraphLine = new Map();
   let current = [];
   const flush = () => {
     if (current.length === 0) return;
@@ -856,7 +882,12 @@ function detectLocal(doc, docsByAbs, add) {
       /^#{1,6}(?:\s|$)/.test(text) || /^\s*(?:[-*+]|\d+[.)])\s+/.test(text));
     const normalized = textLines.join(' ').replace(/\s+/g, ' ').trim();
     if (!structuralOnly && normalized.length >= 80) {
-      blocks.push({ line: current[0].line, normalized: normalized });
+      if (firstParagraphLine.has(normalized)) {
+        add(doc, current[0].line, 'duplicate-paragraph',
+          'repeat of paragraph at line ' + firstParagraphLine.get(normalized));
+      } else {
+        firstParagraphLine.set(normalized, current[0].line);
+      }
     }
     current = [];
   };
@@ -868,16 +899,6 @@ function detectLocal(doc, docsByAbs, add) {
     current.push({ line: i + 1, text: lines[i].trim() });
   }
   flush();
-  const paragraphGroups = new Map();
-  for (const block of blocks) {
-    if (!paragraphGroups.has(block.normalized)) paragraphGroups.set(block.normalized, []);
-    paragraphGroups.get(block.normalized).push(block);
-  }
-  for (const group of paragraphGroups.values()) {
-    for (let i = 1; i < group.length; i++) {
-      add(doc, group[i].line, 'duplicate-paragraph', 'repeat of paragraph at line ' + group[0].line);
-    }
-  }
 }
 
 // 精确候选对：按全局行频升序排序后取 prefix；Jaccard >= t 时较小集合的 prefix 必与对方共享一行
@@ -924,24 +945,28 @@ function prefixCandidatePairs(listed, sizes) {
     .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
 }
 
+// 按原有顺序惰性枚举，不为精确模式预先分配 O(n²) 个文件对。
+function* allDocumentPairs(count) {
+  for (let i = 0; i < count; i++) {
+    for (let j = i + 1; j < count; j++) yield [i, j];
+  }
+}
+
 // 两文件规范化非空行集合的 Jaccard 相似度 >= 0.8 即 near-duplicate，只在字典序较小文件报一条
 function detectNearDuplicates(docs, add, exact) {
   const listed = docs.filter((doc) => doc.nonEmptyLines.size >= 10)
     .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
-  let pairs = [];
-  if (exact) {
-    for (let i = 0; i < listed.length; i++) {
-      for (let j = i + 1; j < listed.length; j++) pairs.push([i, j]);
-    }
-  } else {
-    pairs = prefixCandidatePairs(listed, listed.map((doc) => doc.nonEmptyLines.size));
-  }
+  const pairs = exact
+    ? allDocumentPairs(listed.length)
+    : prefixCandidatePairs(listed, listed.map((doc) => doc.nonEmptyLines.size));
   for (const [i, j] of pairs) {
     const a = listed[i];
     const b = listed[j];
     let intersection = 0;
-    for (const line of a.nonEmptyLines) {
-      if (b.nonEmptyLines.has(line)) intersection++;
+    const [smaller, larger] = a.nonEmptyLines.size <= b.nonEmptyLines.size
+      ? [a.nonEmptyLines, b.nonEmptyLines] : [b.nonEmptyLines, a.nonEmptyLines];
+    for (const line of smaller) {
+      if (larger.has(line)) intersection++;
     }
     const union = a.nonEmptyLines.size + b.nonEmptyLines.size - intersection;
     if (union === 0 || intersection / union < NEAR_DUP_THRESHOLD) continue;
@@ -969,11 +994,7 @@ function baselineEvidence(evidence) {
 function candidateKey(candidate) {
   return [candidate.file, candidate.kind, baselineEvidence(candidate.evidence)].join('\u0000');
 }
-function baselineEntryKey(entry) {
-  return [entry.file, entry.kind, baselineEvidence(entry.evidence)].join('\u0000');
-}
-
-// 读取并校验 baseline 文件，返回已记录候选的 key 集合
+// 读取并校验 baseline 文件，按 key 记录实例数，避免旧实例豁免新增实例
 function readBaseline(file) {
   const absPath = resolve(file);
   let raw;
@@ -995,7 +1016,7 @@ function readBaseline(file) {
     usageError('unsupported baseline schema_version: ' + data.schema_version);
   }
   if (!Array.isArray(data.entries)) usageError('baseline file is missing entries array: ' + absPath);
-  const keys = new Set();
+  const keys = new Map();
   for (const entry of data.entries) {
     if (!entry || typeof entry.file !== 'string' || entry.file.trim() === '' ||
       typeof entry.kind !== 'string' || typeof entry.evidence !== 'string' || entry.evidence.trim() === '') {
@@ -1007,9 +1028,20 @@ function readBaseline(file) {
     if (entry.file.startsWith('/') || /^[A-Za-z]:[\\/]/.test(entry.file) || entry.file.includes('\\')) {
       usageError('baseline entry file must be a repository-relative POSIX path: ' + entry.file);
     }
-    keys.add(baselineEntryKey(entry));
+    const key = candidateKey(entry);
+    keys.set(key, (keys.get(key) || 0) + 1);
   }
   return keys;
+}
+
+// baseline/report 共用序列化与写入边界，保留各自错误诊断。
+function writeJsonOutput(absPath, payload, label) {
+  try {
+    mkdirSync(dirname(absPath), { recursive: true });
+    writeFileSync(absPath, JSON.stringify(payload, null, 2) + '\n');
+  } catch (err) {
+    usageError('cannot write ' + label + ' file: ' + absPath + ' (' + err.message + ')');
+  }
 }
 
 // 把当前候选写成 baseline（按 file/kind/evidence 排序，输出稳定可 diff）
@@ -1028,12 +1060,7 @@ function writeBaseline(file, result) {
     schema_version: BASELINE_SCHEMA_VERSION,
     entries: entries,
   };
-  try {
-    mkdirSync(dirname(absPath), { recursive: true });
-    writeFileSync(absPath, JSON.stringify(payload, null, 2) + '\n');
-  } catch (err) {
-    usageError('cannot write baseline file: ' + absPath + ' (' + err.message + ')');
-  }
+  writeJsonOutput(absPath, payload, 'baseline');
   return entries.length;
 }
 
@@ -1059,12 +1086,7 @@ function writeReport(file, result) {
     },
     findings: findings,
   };
-  try {
-    mkdirSync(dirname(absPath), { recursive: true });
-    writeFileSync(absPath, JSON.stringify(payload, null, 2) + '\n');
-  } catch (err) {
-    usageError('cannot write report file: ' + absPath + ' (' + err.message + ')');
-  }
+  writeJsonOutput(absPath, payload, 'report');
   return findings.length;
 }
 
@@ -1075,8 +1097,19 @@ function evaluateGate(result, failOn, includeFixtures, baselineKeys) {
   const matched = result.candidates.filter((candidate) => failOn.has(candidate.kind));
   const relevant = includeFixtures ? matched : matched.filter((candidate) => candidate.context !== 'fixture');
   const skipped = matched.length - relevant.length;
-  const baselined = baselineKeys ? relevant.filter((candidate) => baselineKeys.has(candidateKey(candidate))) : [];
-  const fresh = baselineKeys ? relevant.filter((candidate) => !baselineKeys.has(candidateKey(candidate))) : relevant;
+  const remaining = new Map(baselineKeys || []);
+  const baselined = [];
+  const fresh = [];
+  for (const candidate of relevant) {
+    const key = candidateKey(candidate);
+    const count = remaining.get(key) || 0;
+    if (count > 0) {
+      remaining.set(key, count - 1);
+      baselined.push(candidate);
+    } else {
+      fresh.push(candidate);
+    }
+  }
   const notes = [];
   if (baselined.length > 0) notes.push(baselined.length + ' baselined candidate(s) ignored');
   if (skipped > 0) notes.push(skipped + ' fixture candidate(s) skipped (use --include-fixtures)');
@@ -1170,40 +1203,14 @@ function main() {
       }
       continue;
     }
-    if (arg === '--baseline' || arg.startsWith('--baseline=')) {
-      let value;
-      if (arg === '--baseline') {
-        value = args[++i];
-        if (value === undefined) usageError('--baseline requires a file path');
-      } else {
-        value = arg.slice('--baseline='.length);
-      }
-      if (!value || value.startsWith('-')) usageError('--baseline requires a file path');
-      baselinePath = value;
-      continue;
-    }
-    if (arg === '--write-baseline' || arg.startsWith('--write-baseline=')) {
-      let value;
-      if (arg === '--write-baseline') {
-        value = args[++i];
-        if (value === undefined) usageError('--write-baseline requires a file path');
-      } else {
-        value = arg.slice('--write-baseline='.length);
-      }
-      if (!value || value.startsWith('-')) usageError('--write-baseline requires a file path');
-      writeBaselinePath = value;
-      continue;
-    }
-    if (arg === '--report-out' || arg.startsWith('--report-out=')) {
-      let value;
-      if (arg === '--report-out') {
-        value = args[++i];
-        if (value === undefined) usageError('--report-out requires a file path');
-      } else {
-        value = arg.slice('--report-out='.length);
-      }
-      if (!value || value.startsWith('-')) usageError('--report-out requires a file path');
-      reportOutPath = value;
+    const pathOption = ['--baseline', '--write-baseline', '--report-out']
+      .find((option) => arg === option || arg.startsWith(option + '='));
+    if (pathOption) {
+      const value = arg === pathOption ? args[++i] : arg.slice(pathOption.length + 1);
+      if (!value || value.startsWith('-')) usageError(pathOption + ' requires a file path');
+      if (pathOption === '--baseline') baselinePath = value;
+      else if (pathOption === '--write-baseline') writeBaselinePath = value;
+      else reportOutPath = value;
       continue;
     }
     if (arg.startsWith('-') && arg !== '-') usageError('unknown option: ' + arg);
@@ -1232,6 +1239,11 @@ function main() {
   const targetAbs = resolve(targetArg);
   const baselineKeys = baselinePath !== null ? readBaseline(baselinePath) : null;
 
+  try {
+    validateOutputs(reportOutPath, writeBaselinePath, baselinePath);
+  } catch (err) {
+    usageError('cannot validate output paths: ' + err.message);
+  }
   const docs = [];
   for (const absPath of collectFiles(targetAbs)) {
     const doc = analyzeFile(absPath, targetAbs);

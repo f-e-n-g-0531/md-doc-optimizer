@@ -90,8 +90,11 @@ md-doc-optimizer/
 │   └── release.yml               # 推送 v* 标签或手动触发时发布 Release
 ├── scripts/
 │   ├── check-docs.mjs            # 版本号 / 引用 / README 目录树 / pre-scan schema 自洽检查
+│   ├── check-docs.test.mjs       # 自洽检查正反例回归测试
 │   ├── pre-scan.mjs              # 候选预扫：本地链接/锚点/重复/时间词等（只报候选；--fail-on 可做 CI 门禁）
-│   └── pre-scan.test.mjs         # 预扫脚本自测（CI 门禁）
+│   ├── pre-scan.test.mjs         # 预扫脚本自测（CI 门禁）
+│   ├── release-target.mjs        # 只读解析发布提交并核对版本
+│   └── release-target.test.mjs   # 发布目标解析回归测试
 ├── references/
 │   ├── sources.md                # 同领域项目/工具调研（含出处）
 │   ├── audit-checklist.md        # 逐目标检查清单
@@ -114,13 +117,15 @@ md-doc-optimizer/
 
 ## 质量门禁（本仓库 CI）
 
-[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 在 main 分支推送或提交 PR（改动命中 paths 过滤）时自动跑六道检查：
+[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 在 main 分支推送或提交 PR（改动命中 paths 过滤）时自动运行以下检查：
 
 | 检查 | 命令 | 作用 |
 | --- | --- | --- |
 | 结构 lint | `npx markdownlint-cli2 "**/*.md"` | 标题层级、围栏、表格等结构问题 |
 | 链接检查 | `lychee --config ./lychee.toml --no-progress "**/*.md"` | 失效链接 |
 | 自洽检查 | `node scripts/check-docs.mjs` | SKILL.md 版本 == CHANGELOG 最新版本；引用的文件都存在；README 目录树与实际文件同步 |
+| 自洽检查自测 | `node scripts/check-docs.test.mjs` | 畸形 Schema、契约漂移与目录遗漏的正反例回归 |
+| 发布目标自测 | `node scripts/release-target.test.mjs` | 发布提交选择与版本核验（仅临时仓库，无真实发布副作用） |
 | 预扫自测 | `node scripts/pre-scan.test.mjs` | 预扫脚本行为回归（临时夹具覆盖各类候选检测） |
 | 报告契约 | `npx ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"` | 机器可读报告（样例 + 两份真实案例）符合 JSON Schema |
 | 预扫契约与门禁 | `node scripts/pre-scan.mjs . --fail-on <结构性 kind>`（见 [tool-configs](./references/tool-configs.md)） | 输出先按 [pre-scan.schema.json](./references/pre-scan.schema.json) 校验；结构性失效类候选（死链/图片/锚点/大小写/空目标/未定义引用）直接让 CI 失败 |

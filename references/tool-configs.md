@@ -20,7 +20,7 @@ MD032: false
 MD024:
   siblings_only: true
 
-# 多一级标题在长文档中允许
+# 忽略 frontmatter title；正文仍只允许一个一级标题
 MD025:
   front_matter_title: ""
 
@@ -164,7 +164,7 @@ lychee --config ./lychee.toml --no-progress "**/*.md"
 
 ## 内置预扫脚本（scripts/pre-scan.mjs）
 
-零依赖的候选生成器，用于 P2：默认只读（不访问网络、不修改目标仓库），输出确定性的 JSON 候选清单；仅显式传 `--write-baseline <file>` 时才写入用户指定的基线文件。候选必须再按 SKILL.md 的 P3 逐条核对，不能直接当结论。
+零依赖的候选生成器，用于 P2：默认只读（不访问网络、不修改目标仓库），输出确定性的 JSON 候选清单；仅显式传 `--write-baseline <file>` 或 `--report-out <file>` 时才写入指定的基线或报告文件（已有输出会覆盖）。输出不能使用 Markdown 路径、扫描脚本自身或输入基线路径，报告和基线输出也不能指向同一文件。候选必须再按 SKILL.md 的 P3 逐条核对，不能直接当结论。
 
 ~~~bash
 node scripts/pre-scan.mjs <目标目录>          # 输出 JSON 候选清单
@@ -178,9 +178,11 @@ node scripts/pre-scan.mjs <目标目录> --report-out draft.json  # 输出报告
 
 `--text` 每行按 `file:line [类别] kind -- evidence | 原文` 输出：`evidence` 是命中的具体词或路径（例如同一行里的「目前」「最近」会分别列出），便于逐条 triage。
 
-`--report-out <file>` 把候选转成 references/report.schema.json 兼容的报告草稿：每条 finding 的 `action=annotate`（等待 P3 triage），`severity` 按 kind 映射（死链/图片/锚点/空目标=High；大小写/未定义引用/硬编码分支/时间词/近重复=Medium；其余=Low），`summary` 中 examined/needs_human 为候选数、fixed/no_action 为 0。它只是 P2→P3 的草稿，不是已完成审计。
+`--report-out <file>` 把候选转成 references/report.schema.json 兼容的报告草稿：每条 finding 的 `action=annotate`（等待 P3 triage），`severity` 按 kind 映射（死链/图片/锚点/空目标/越界链接=High；大小写/未定义引用/硬编码分支/时间词/近重复=Medium；其余=Low），`summary` 中 examined/needs_human 为候选数、fixed/no_action 为 0。它只是 P2→P3 的草稿，不是已完成审计。
 
-`--fail-on <kind,...>` 是 CI 门禁：命中指定 kind 时退出码为 1，匹配项写到 stderr（最多 20 条明细，其余以 `... and N more` 提示，完整列表看 stdout JSON）；stdout 仍输出完整 JSON/文本，便于同时存档。**默认跳过 `context=fixture` 的候选**（测试夹具里的坏链接是内容本身），需要时加 `--include-fixtures`。kind 用逗号分隔、不能有空项；未知 kind 或空项按用法错误退出 2。退出码：**0 成功、1 门禁命中、2 用法错误**。仅跳过 fixture 时也会在 stderr 写一行跳过计数（退出码仍是 0）；门禁明细里的 fixture 候选会标 `[fixture]`。
+`--fail-on <kind,...>` 是 CI 门禁：命中指定 kind 时退出码为 1，匹配项写到 stderr（最多 20 条明细，其余以 `... and N more` 提示，完整列表看 stdout JSON）；stdout 仍输出完整 JSON/文本，便于同时存档。**默认跳过 `context=fixture` 的候选**（测试夹具里的坏链接是内容本身），需要时加 `--include-fixtures`。kind 用逗号分隔、不能有空项；未知 kind 或空项按用法错误退出 2。退出码：**0 成功、1 门禁命中、2 用法或文件读写错误**。目录或 Markdown 读取失败时立即报错，不输出不完整的成功报告。仅跳过 fixture 时也会在 stderr 写一行跳过计数（退出码仍是 0）；门禁明细里的 fixture 候选会标 `[fixture]`。
+
+基线按 `file/kind/evidence` 及实例数量匹配：相同行号漂移仍可豁免，但同一证据新增的实例仍会触发门禁。
 
 ### 行内抑制标记
 
@@ -229,7 +231,7 @@ node scripts/pre-scan.mjs <目标目录> --report-out draft.json  # 输出报告
 | multiple-h1 | A | 一个文件多个一级标题 |
 | unused-reference-definition | A | 引用定义 `[label]: url` 从未被引用 |
 | duplicate-reference-definition | A | 同一引用标签重复定义，后一条会被忽略 |
-| duplicate-link-target | A | 同一本地链接目标在单文件中出现 >= 3 次（内联链接；锚点/外部链接不计） |
+| duplicate-link-target | A | 同一本地链接目标在单文件中出现 >= 3 次（内联、HTML、引用式链接合并计数；锚点/外部链接不计） |
 | near-duplicate-files | A | 两个文件行集合高度相似，疑似拷贝或生成副本 |
 
 输出结构：`{tool, schema_version, target, files_scanned, candidates[], summary{total, by_kind, by_category}}`；candidates 按 file/line/kind 排序，便于 diff。

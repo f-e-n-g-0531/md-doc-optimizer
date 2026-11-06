@@ -65,11 +65,28 @@ for (const r of mustReference) {
   if (!skill.includes(r)) errors.push(`${r} 未被 SKILL.md 引用`);
 }
 
-// 4) README 目录结构必须覆盖仓库文件（检查「目录结构」围栏块内的文件名，忽略 .git 与 .gitignore）
+// 4) README 目录结构必须覆盖仓库文件（按层级还原完整相对路径）
 const readme = read('README.md').replace(/\r\n/g, '\n');
 const treeMatch = readme.match(/##\s*目录结构[^\n]*\n+~~~\w*\n([\s\S]*?)~~~/);
 const tree = treeMatch ? treeMatch[1] : readme;
 if (!treeMatch) errors.push('README.md 找不到「目录结构」围栏块');
+const listedPaths = new Set();
+const parents = [];
+for (const line of tree.split('\n')) {
+  const entry = line.match(/^((?:│   |    )*)[├└]──\s+(.+?)(?:\s+#.*)?$/);
+  if (!entry) continue;
+  const depth = entry[1].length / 4;
+  const name = entry[2].trim();
+  parents.length = depth;
+  const prefix = parents.filter(Boolean).join('/');
+  if (name.endsWith('/')) {
+    parents[depth] = name.replace(/\/$/, '');
+  } else {
+    for (const file of name.split(/\s+\/\s+/)) {
+      listedPaths.add((prefix ? prefix + '/' : '') + file);
+    }
+  }
+}
 const ignore = new Set(['.git', '.gitignore', 'node_modules']);
 function walk(dir, out = []) {
   for (const f of readdirSync(dir)) {
@@ -82,19 +99,20 @@ function walk(dir, out = []) {
 }
 for (const f of walk(root)) {
   if (f.endsWith('README.md') || f.endsWith('SKILL.md') || f.endsWith('LICENSE') || f.endsWith('CHANGELOG.md')) continue;
-  const base = basename(f);
-  if (!tree.includes(base)) errors.push(`README 目录结构未列出: ${f}`);
+  if (!listedPaths.has(f)) errors.push(`README 目录结构未列出: ${f}`);
 }
 
 // 5) README 的本地相对链接必须存在
-for (const m of readme.matchAll(/\]\(\.\/([^)#\s]+)/g)) {
+// 平衡圆括号按一层嵌套识别；无法完整闭合的目标保守跳过，宁可漏查不可误报
+for (const m of readme.matchAll(/\]\(\.\/((?:[^()#\s]|\([^()#\s]*\))*)(?:#[^)\s]*)?\)/g)) {
   if (!existsSync(abs(m[1]))) errors.push(`README 本地链接失效: ${m[1]}`);
 }
 
-// 6) schema 与示例必须是合法 JSON
+// 6) schema 与示例必须是合法 JSON；保留解析结果，供契约校验复用
+const parsedJson = new Map();
 for (const p of ['references/report.schema.json', 'references/pre-scan.schema.json', 'examples/report.sample.json']) {
   try {
-    JSON.parse(read(p));
+    parsedJson.set(p, JSON.parse(read(p)));
   } catch (e) {
     errors.push(`${p} 不是合法 JSON: ${e.message}`);
   }
@@ -108,19 +126,15 @@ if (!categoryBlock) {
 } else {
   const scriptKinds = new Map();
   for (const m of categoryBlock[1].matchAll(/'([a-z0-9-]+)':\s*'([ABC])'/g)) scriptKinds.set(m[1], m[2]);
-  let preScanSchema = null;
-  try {
-    preScanSchema = JSON.parse(read('references/pre-scan.schema.json'));
-  } catch (e) {
-    // JSON 合法性已在上一步报告
-  }
+  const schemaPath = 'references/pre-scan.schema.json';
+  const preScanSchema = parsedJson.get(schemaPath);
   const def = preScanSchema && preScanSchema.$defs && preScanSchema.$defs.candidate;
   const kindDef = preScanSchema && preScanSchema.$defs && preScanSchema.$defs.kind;
   const byKind = preScanSchema && preScanSchema.properties && preScanSchema.properties.summary &&
     preScanSchema.properties.summary.properties && preScanSchema.properties.summary.properties.by_kind;
   if (scriptKinds.size === 0) errors.push('scripts/pre-scan.mjs 的 CATEGORY 为空');
   if (!def || !kindDef) {
-    if (preScanSchema) errors.push('references/pre-scan.schema.json 缺少 $defs.kind 或 $defs.candidate');
+    if (parsedJson.has(schemaPath)) errors.push('references/pre-scan.schema.json 缺少 $defs.kind 或 $defs.candidate');
   } else {
     // kind 枚举只允许在 $defs.kind 定义一次；candidate.kind 与 summary.by_kind.propertyNames 必须「只」引用它，
     // 旁挂 enum / 重复或冲突的 allOf 映射都会让 check-docs 通过而 ajv 拒绝，因此这里做严格结构校验。
@@ -139,6 +153,10 @@ if (!categoryBlock) {
     const mappedKinds = new Map();
     const allOfKeys = new Set(['if', 'then', '$comment', 'description', 'title']);
     for (const item of allOf) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        errors.push('pre-scan schema 的 allOf 条目必须是包含 if/then 的对象');
+        continue;
+      }
       if (!Object.prototype.hasOwnProperty.call(item, 'if') || !Object.prototype.hasOwnProperty.call(item, 'then')) {
         errors.push('pre-scan schema 的 allOf 条目必须包含 if/then');
       }

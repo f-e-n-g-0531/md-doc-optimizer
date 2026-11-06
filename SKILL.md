@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.17.0"
+  version: "1.18.0"
 ---
 
 # Markdown 文档优化器

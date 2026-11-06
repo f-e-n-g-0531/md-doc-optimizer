@@ -7,58 +7,75 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号，例如 v1.4.0（留空则使用仓库最新 tag；不会把分支名当版本号）'
+        description: '版本号，例如 v1.4.0（留空使用当前提交最近可达 tag）'
         required: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  # 发布前先跑 lint + 链接检查，作为质量门禁
-  qa:
-    uses: ./.github/workflows/docs-qa.yml
-
-  release:
-    needs: qa
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.target.outputs.version }}
+      sha: ${{ steps.target.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Resolve version
-        id: version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Resolve and validate target
+        id: target
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: node scripts/release-target.mjs
+
+  qa:
+    needs: resolve
+    uses: ./.github/workflows/docs-qa.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  release:
+    needs: [resolve, qa]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Ensure tag matches validated commit
+        env:
+          V: ${{ needs.resolve.outputs.version }}
+          SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${INPUT_VERSION}" ]; then
-              V="${INPUT_VERSION}"
-            else
-              # 手动触发没有“刚推送的 tag”，回退到最新 tag，避免把分支名当版本号
-              V="$(git describe --tags --abbrev=0)"
+          git fetch --force origin 'refs/tags/*:refs/tags/*'
+          if git show-ref --verify --quiet "refs/tags/${V}"; then
+            ACTUAL="$(git rev-parse "refs/tags/${V}^{commit}")"
+            if [ "$ACTUAL" != "$SHA" ]; then
+              echo "::error::Release tag changed after QA"; exit 1
             fi
           else
-            V="${GITHUB_REF_NAME}"
-          fi
-          if [[ ! "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version must look like vX.Y.Z (got '$V')"; exit 1
-          fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-
-      - name: Ensure tag exists
-        env:
-          V: ${{ steps.version.outputs.version }}
-        run: |
-          if ! git rev-parse -q --verify "refs/tags/${V}" >/dev/null 2>&1; then
-            git tag -a "${V}" -m "${V}"
-            git push origin "${V}"
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$V" "$SHA" -m "$V"
+            git push origin "refs/tags/${V}"
           fi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: md-doc-optimizer ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.resolve.outputs.version }}
+          target_commitish: ${{ needs.resolve.outputs.sha }}
+          name: md-doc-optimizer ${{ needs.resolve.outputs.version }}
           generate_release_notes: true
