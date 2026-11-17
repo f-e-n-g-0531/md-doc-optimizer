@@ -242,10 +242,11 @@ node scripts/pre-scan.mjs <目标目录> --report-out draft.json  # 输出报告
 - **大小写**：不依赖本机文件系统是否区分大小写，而是逐段 `readdir` 比对真实文件名，因此 Windows 开发机与 Linux CI 上的结论一致。
 - **引用式链接**：支持完整 `[text][label]`、折叠 `[label][]` 与快捷 `[label]`（含快捷图片 `![alt]`）；定义可位于行首、blockquote 或列表项内，目标可换行；脚注 `[^1]: ...` 不是链接定义、不参与检查，但脚注正文里的引用仍会扫描。
 - **图片**：只检查本地相对路径（含图片形式的引用定义、`[![alt](img)](link)` 嵌套写法，以及 alt 内嵌一层方括号）；外部 URL 交给 lychee 等链接检查器。
-- **HTML 注释**：注释里的链接、引用定义、标题与显式锚点都不参与检查；注释里的围栏标记也不能吞掉注释后的正文。
+- **HTML 注释**：注释里的链接、引用定义、标题、显式锚点、时间词与占位标记都不参与检查；重复段落与文件相似度也只使用去注释后的文本。注释后的可见正文仍会检查，候选保留原文件行号；注释里的围栏标记不能吞掉后续正文。
 - **原始 HTML**：检查 `<a href>`、`<img src/srcset>`、`<source src/srcset>` 的本地相对路径（含锚点、大小写；标签可跨行；`data-*` 与属性值里的 `href=` 不误报）；外部 URL 交给 lychee。`<pre>`/`<script>`/`<style>`/`<textarea>` 块内不扫描。
 - **代码上下文**：顶层与 blockquote/列表内的围栏、`<pre>` 等原始 HTML 块（含容器内）、4 空格/tab 缩进代码块都识别（缩进代码按近似块上下文判断），内容整体忽略。
 - **标题**：ATX（#）与 setext（`Title` + `===`/`---`）都参与 slug、重复标题与多 H1 计算。
+- **目标实体**：Markdown 行内链接、图片、嵌套图片链接和引用定义的目标支持单次实体解码（现有命名集合 `amp/lt/gt/quot/apos/nbsp` 及十进制/十六进制数字实体）；解码在协议、查询与锚点识别前进行。转义的 `\&`、百分号编码及未知命名实体不会被当作新的实体再次解码；HTML 属性仍沿用原来的单次解码。
 - **路径分隔符**：链接里的反斜杠（含编码后的 `%5C`）按 GitHub 行为报失效——线上会变成 `%5C` 404，即使 Windows 本地能打开；统一用 `/`。CommonMark 的标点转义（如 `my\_file.md`）先解转义，不算分隔符。
 - **空目标**：`[]()`、`[]( "title")`、`[](<> "title")` 报空目标；按 CommonMark，`]("title")` 的引号属于 destination，按普通链接核对；`[label]:`（无目标）属启发式候选（CommonMark 会按普通段落渲染），需人工确认。
 
@@ -261,7 +262,7 @@ node scripts/pre-scan.mjs <目标目录> --report-out draft.json  # 输出报告
 
 文件 `.github/workflows/docs-qa.yml`。下面这份可直接复制，门禁步骤与本仓库实际文件一致（额外只有说明注释和末尾可选的 Vale 段）：markdownlint、链接检查、文档自洽检查、预扫自测、预扫契约与门禁、报告 Schema 校验是必过门禁；Vale 需先备好风格包、默认注释，按需启用。
 
-下面四步「docs consistency / pre-scan self-test / pre-scan contract & gate / validate report schema」依赖本仓库的 scripts/check-docs.mjs、scripts/pre-scan.test.mjs、scripts/pre-scan.mjs 与 references/ 下的两个 schema；复制到其他仓库时按需删改，或换成自己的自洽检查。
+自洽检查、发布目标与预扫自测，以及契约门禁依赖本仓库 scripts/ 下的对应脚本、references/ 下的两个 schema 与 examples/ 报告样例；复制到其他仓库时按需删改，或换成自己的检查。`workflow_call.inputs.ref` 与 checkout 的 `ref` 配合发布流程校验指定提交，替换本仓库工作流时必须保留。
 
 ~~~yaml
 name: docs-qa
@@ -288,6 +289,12 @@ on:
       - "**.json"
 
   workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to validate for release
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -297,6 +304,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -305,14 +314,20 @@ jobs:
       - name: markdownlint
         run: npx --yes markdownlint-cli2 "**/*.md"
 
-      # 仓库自洽检查：SKILL.md 版本 / 引用文件 / README 目录树（依赖 scripts/check-docs.mjs）
+      - name: docs consistency self-test
+        if: ${{ hashFiles('scripts/check-docs.test.mjs') != '' }}
+        run: node scripts/check-docs.test.mjs
+
       - name: docs consistency
         run: node scripts/check-docs.mjs
+
+      - name: release target self-test
+        if: ${{ hashFiles('scripts/release-target.test.mjs') != '' }}
+        run: node scripts/release-target.test.mjs
 
       - name: pre-scan self-test
         run: node scripts/pre-scan.test.mjs
 
-      # 预扫输出契约 + 结构性门禁（依赖 references/pre-scan.schema.json 与 scripts/pre-scan.mjs）
       - name: pre-scan contract & gate
         run: |
           node scripts/pre-scan.mjs . > "$RUNNER_TEMP/pre-scan-out.json"
@@ -321,7 +336,6 @@ jobs:
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "$RUNNER_TEMP/pre-scan-report.json"
           node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,link-outside-root,case-mismatch-link,empty-link-target,undefined-reference-label
 
-      # 报告 JSON Schema 校验（依赖 references/report.schema.json 与 examples/*.json）
       - name: validate report schema
         run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"
 

@@ -207,6 +207,14 @@ function decodeEntities(text) {
     return value === undefined ? match : value;
   });
 }
+// Markdown destination：先去语法尖括号，再单次处理原始转义与实体；生成字符不再参与转义解析。
+// 百分号解码仍由 checkLink 在拆分路径后执行，HTML 属性不经过这里，防止二次实体解码。
+function markdownTarget(raw) {
+  return String(raw || '').trim().replace(/^<|>$/g, '')
+    .replace(/\\[!-/:-@\[-\x60{-~]|&(?:#\d+|#x[0-9a-f]+|[a-z]+);/gi,
+      (token) => token.startsWith('\\') ? token.slice(1) : decodeEntities(token));
+}
+
 // 提取围栏标记：返回 {char, len, info}；顶层、blockquote、列表内的围栏都识别
 function fenceTokenOf(line) {
   const m = line.match(CONTAINER_FENCE_RE);
@@ -573,11 +581,11 @@ function analyzeFile(absPath, targetAbs) {
     }
   }
 
-  // 文件相似度用的规范化非空行集合（围栏内容不计入）
+  // 文件相似度用的规范化非空行集合（代码块与 HTML 注释内容不计入）
   const nonEmptyLines = new Set();
   for (let i = 0; i < lines.length; i++) {
     if (ignored[i]) continue;
-    const normalized = lines[i].replace(/\s+/g, ' ').trim();
+    const normalized = commentMasked[i].replace(/\s+/g, ' ').trim();
     if (normalized) nonEmptyLines.add(normalized);
   }
   const rel = toPosix(relative(targetAbs, absPath));
@@ -661,7 +669,7 @@ function detectLocal(doc, docsByAbs, add) {
 
   const checkLink = (lineNo, rawTarget, options) => {
     const isImage = Boolean(options && options.image);
-    let target = String(rawTarget || '').trim().replace(/^<|>$/g, '');
+    const target = String(rawTarget || '').trim(); // 调用方已移除 Markdown 语法包装；实体产生的尖括号是路径内容
     if (!target || target === '#') return;
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) return; // http(s)/mailto/tel/data 等外部协议
     if (target.startsWith('/')) return; // 站点根相对路径，无法确定基准目录
@@ -679,8 +687,9 @@ function detectLocal(doc, docsByAbs, add) {
     } catch (err) {
       // 保留原值
     }
-    // CommonMark 允许用反斜杠转义 ASCII 标点（如 ./a\_b.md）；先解转义，剩下的反斜杠才是路径分隔符
-    const unescapedPath = decodedPath.replace(/\\([!-/:-@\[-\`{-~])/g, '$1');
+    // Markdown 原始标点转义已在 markdownTarget 处理；不能把实体或百分号生成的反斜杠再当转义。
+    // 非 Markdown 调用保留原有处理，避免本轮改变 HTML 路径语义。
+    const unescapedPath = options && options.markdown ? decodedPath : decodedPath.replace(/\\([!-/:-@\[-\`{-~])/g, '$1');
     if (unescapedPath.includes('\\')) {
       // GitHub/Linux 不把 \ 当目录分隔符：本地 Windows 能打开，线上是 %5C 404
       add(doc, lineNo, isImage ? 'broken-local-image' : 'broken-local-link',
@@ -763,16 +772,16 @@ function detectLocal(doc, docsByAbs, add) {
     let remaining = masked;
     for (const nested of masked.matchAll(NESTED_IMAGE_LINK_RE)) {
       const inner = nested[1].match(/^(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]*>|(?:[^()\s>]|\([^()\s>]*\))*)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)$/);
-      if (inner) checkLink(lineNo, inner[3], { image: true });
-      checkLink(lineNo, nested[2], { image: false });
+      if (inner) checkLink(lineNo, markdownTarget(inner[3]), { image: true, markdown: true });
+      checkLink(lineNo, markdownTarget(nested[2]), { image: false, markdown: true });
       remaining = remaining.slice(0, nested.index) + ' '.repeat(nested[0].length) +
         remaining.slice(nested.index + nested[0].length);
     }
     for (const m of remaining.matchAll(LINK_RE)) {
       if (/^["']/.test(m[4]) && m[3].length > 0) continue; // 空目标 + 标题，交给 EMPTY_TARGET_RE
       const isImage = m[1] === '!';
-      const target = m[4].trim().replace(/^<|>$/g, ''); // 与 checkLink 同序归一，重复统计/核对一致
-      checkLink(lineNo, target, { image: isImage });
+      const target = markdownTarget(m[4]); // 核对与重复统计使用相同的单次解码目标
+      checkLink(lineNo, target, { image: isImage, markdown: true });
       if (!isImage) recordDuplicateTarget(lineNo, target);
     }
     for (const m of masked.matchAll(EMPTY_TARGET_RE)) {
@@ -803,7 +812,7 @@ function detectLocal(doc, docsByAbs, add) {
   const refTargetByLabel = new Map();
   for (const def of doc.refDefinitions) {
     if (def.normalized && def.target && !refTargetByLabel.has(def.normalized)) {
-      refTargetByLabel.set(def.normalized, def.target);
+      refTargetByLabel.set(def.normalized, markdownTarget(def.target));
     }
   }
   for (const use of doc.explicitUses) {
@@ -829,7 +838,7 @@ function detectLocal(doc, docsByAbs, add) {
     if (!def.target) {
       add(doc, def.line, 'empty-link-target', 'reference definition [' + def.label + '] has an empty target');
     } else {
-      checkLink(def.line, def.target, { image: imageOnly });
+      checkLink(def.line, markdownTarget(def.target), { image: imageOnly, markdown: true });
     }
     if (firstDefinitionLine.has(def.normalized)) {
       add(doc, def.line, 'duplicate-reference-definition',
@@ -851,7 +860,7 @@ function detectLocal(doc, docsByAbs, add) {
   // 2) 过期时间表述 / 占位标记（只看 prose：剔除行内代码与 URL）
   for (let i = 0; i < lines.length; i++) {
     if (doc.ignored[i]) continue;
-    const prose = maskUrls(maskInlineCode(lines[i]));
+    const prose = maskUrls(maskInlineCode(doc.commentMasked[i]));
     if (!prose.trim()) continue;
     for (const phrase of phraseHits(prose, STALE_RE)) add(doc, i + 1, 'stale-time-phrase', phrase);
     for (const phrase of phraseHits(prose, PLACEHOLDER_RE)) add(doc, i + 1, 'placeholder-marker', phrase);
@@ -892,11 +901,11 @@ function detectLocal(doc, docsByAbs, add) {
     current = [];
   };
   for (let i = 0; i < lines.length; i++) {
-    if (doc.ignored[i] || !lines[i].trim() || (doc.setextLines && doc.setextLines.has(i))) {
+    if (doc.ignored[i] || !doc.commentMasked[i].trim() || (doc.setextLines && doc.setextLines.has(i))) {
       flush();
       continue;
     }
-    current.push({ line: i + 1, text: lines[i].trim() });
+    current.push({ line: i + 1, text: doc.commentMasked[i].trim() });
   }
   flush();
 }

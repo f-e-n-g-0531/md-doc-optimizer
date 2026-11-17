@@ -151,7 +151,21 @@ if (!categoryBlock) {
     if (enumKinds.size !== enumList.length) errors.push('pre-scan schema 的 $defs.kind.enum 有重复项');
     const allOf = Array.isArray(def.allOf) ? def.allOf : [];
     const mappedKinds = new Map();
-    const allOfKeys = new Set(['if', 'then', '$comment', 'description', 'title']);
+    const annotations = new Set(['$comment', 'description', 'title']);
+    const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+    // 只接受本仓库的纯 kind -> category 映射；不能仅抽取 const 而忽略旁挂的冲突约束。
+    const hasShape = (value, required) => isObject(value) &&
+      required.every((key) => Object.hasOwn(value, key)) &&
+      Object.keys(value).every((key) => required.includes(key) ||
+        (annotations.has(key) && typeof value[key] === 'string'));
+    const isMappingBranch = (branch, property, conditional) => {
+      if (!hasShape(branch, conditional ? ['properties', 'required'] : ['properties'])) return false;
+      const properties = branch.properties;
+      if (!isObject(properties) || Object.keys(properties).length !== 1 || !Object.hasOwn(properties, property)) return false;
+      if (!hasShape(properties[property], ['const'])) return false;
+      return !conditional || (Array.isArray(branch.required) && branch.required.length === 1 && branch.required[0] === property);
+    };
+    const allOfKeys = new Set(['if', 'then', ...annotations]);
     for (const item of allOf) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) {
         errors.push('pre-scan schema 的 allOf 条目必须是包含 if/then 的对象');
@@ -163,7 +177,12 @@ if (!categoryBlock) {
       for (const key of Object.keys(item)) {
         if (!allOfKeys.has(key)) errors.push('pre-scan schema 的 allOf 条目包含未知键: ' + key);
       }
-      const kind = item.if && item.if.properties && item.if.properties.kind && item.if.properties.kind.const;
+      if (!hasShape(item, ['if', 'then']) ||
+        !isMappingBranch(item.if, 'kind', true) || !isMappingBranch(item.then, 'category', false)) {
+        errors.push('pre-scan schema 的 allOf 映射结构必须为纯 kind 条件与 category 常量（仅允许字符串注释元数据）');
+        continue;
+      }
+      const kind = item.if.properties.kind.const;
       const category = item.then && item.then.properties && item.then.properties.category && item.then.properties.category.const;
       if (!kind || !['A', 'B', 'C'].includes(category)) {
         errors.push('pre-scan schema 的 allOf 条目必须把 kind 映射到 A/B/C');

@@ -782,8 +782,9 @@ function runAssertions(tmp) {
     [6, 'duplicate-heading', 'repeat of heading at line 2'],
     [8, 'duplicate-heading', 'repeat of heading at line 4'],
     [10, 'duplicate-heading', 'repeat of heading at line 2'],
+    [17, 'duplicate-paragraph', 'repeat of paragraph at line 13'],
     [19, 'duplicate-paragraph', 'repeat of paragraph at line 15'],
-    [21, 'duplicate-paragraph', 'repeat of paragraph at line 17'],
+    [21, 'duplicate-paragraph', 'repeat of paragraph at line 13'],
     [26, 'multiple-h1', 'additional H1; first H1 at line 24'],
     [28, 'duplicate-heading', 'repeat of heading at line 24'],
     [28, 'multiple-h1', 'additional H1; first H1 at line 24'],
@@ -1153,6 +1154,102 @@ function runAssertions(tmp) {
     [scriptPath, baselineDir, '--write-baseline'], { encoding: 'utf8' });
   eq(writeBaselineMissingValue.status, 2, '--write-baseline without a path exits 2');
   ok(writeBaselineMissingValue.stderr.includes('requires a file path'), 'missing baseline path message');
+
+  // Markdown 目标实体只解码一次，HTML 通路与百分号编码不得二次解码。
+  const entityDir = join(tmp, 'entity-targets');
+  mkdirSync(entityDir);
+  for (const name of ['a&b.md', 'literal&amp;.md', 'unknown&madeup;.md', 'a b.md']) {
+    writeFileSync(join(entityDir, name), '# Entity Target\n');
+  }
+  writeFileSync(join(entityDir, 'a&b.png'), 'image');
+  writeFileSync(join(entityDir, 'links.md'), [
+    '# Entity Links', '',
+    '[inline](./a&amp;b.md)',
+    '[angle](<./a&#38;b.md>)',
+    '![image](./a&#x26;b.png)',
+    '[![badge](./a&amp;b.png)](./a&#38;b.md)',
+    '[reference][doc]',
+    '![reference image][image]',
+    '[doc]: ./a&amp;b.md',
+    '[image]: ./a&#38;b.png',
+    '[once](./literal&amp;amp;.md)',
+    '<a href="./literal&amp;amp;.md">html once</a>',
+    '[percent](./literal%26amp%3B.md)',
+    '[escaped](./literal\\&amp;.md)',
+    '[unknown](./unknown&madeup;.md)',
+    '[space](<./a&#32;b.md>)',
+    '[external](https&#58;//example.com)',
+    '[anchor](./a&amp;b.md&#35;entity-target)',
+    '[query](./a&amp;b.md&#63;view=1)',
+    '[multiline ref][multi]',
+    '[multi]:',
+    '  <./a&#38;b.md>',
+    '[missing](./missing&amp;file.md)',
+  ].join('\n'));
+  const entityResult = JSON.parse(runCli([entityDir]));
+  eq(entityResult.candidates.filter((c) => c.kind === 'broken-local-link').map((c) => c.evidence),
+    ['relative link target not found: ./missing&file.md'], 'entity destinations resolve before query/fragment split; missing evidence remains complete');
+  eq(entityResult.candidates.filter((c) => c.kind === 'broken-local-image' || c.kind === 'broken-anchor'), [],
+    'inline, nested and reference images plus encoded fragments resolve');
+  ok(entityResult.candidates.some((c) => c.kind === 'duplicate-link-target' && c.evidence.endsWith('./a&b.md')),
+    'Markdown and reference duplicate targets use decoded destination');
+  eq(entityResult.candidates.filter((c) => c.kind !== 'duplicate-link-target' && c.kind !== 'broken-local-link'), [],
+    'no other entity fixture candidates');
+
+  writeFileSync(join(entityDir, 'slash.md'), '[numeric slash](./a&#92;&amp;b.md)\n');
+  const slashCandidates = JSON.parse(runCli([entityDir])).candidates.filter((c) => c.file === 'slash.md');
+  eq(slashCandidates.map((c) => c.kind), ['broken-local-link'], 'entity-generated backslash is never reinterpreted as Markdown escape');
+  ok(slashCandidates[0].evidence.includes('backslash separators'), 'generated slash is rejected instead of resolving a&b.md');
+
+  // HTML 注释在所有正文检测通路里都不可见；保留注释后的正文和原始行号。
+  const commentDir = join(tmp, 'comment-prose');
+  mkdirSync(commentDir);
+  const longProse = 'A visible paragraph with enough meaningful words to exceed the eighty character duplicate detection threshold.';
+  const commentFile = join(commentDir, 'visible.md');
+  writeFileSync(commentFile, [
+    '# Visible', '',
+    '<!-- currently TODO -->',
+    '<!--', 'recently FIXME', '--> soon TBD', '',
+    '`<!--` currently TODO `-->`', '',
+    '<!-- ' + longProse + ' -->', '',
+    '<!--', longProse, '-->', '',
+    longProse + ' <!-- first note -->', '',
+    longProse + ' <!-- different note -->', '',
+  ].join('\n'));
+  const commentResult = JSON.parse(runCli([commentDir]));
+  eq(commentResult.candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [6, 'placeholder-marker', 'TBD'],
+    [6, 'stale-time-phrase', 'soon'],
+    [8, 'placeholder-marker', 'TODO'],
+    [8, 'stale-time-phrase', 'currently'],
+    [18, 'duplicate-paragraph', 'repeat of paragraph at line 16'],
+  ], 'hidden prose is ignored; visible prose after comments and literal comment delimiters in code remain checked');
+  const commentGate = spawnSync(process.execPath, [scriptPath, commentDir, '--fail-on', 'placeholder-marker'], { encoding: 'utf8' });
+  eq(commentGate.status, 1, 'visible placeholder still fails gate');
+  const commentBaseline = join(tmp, 'comment-baseline.json');
+  runCli([commentDir, '--write-baseline', commentBaseline]);
+  eq(JSON.parse(readFileSync(commentBaseline, 'utf8')).entries.length, 5, 'baseline contains only visible candidates');
+  const commentReport = join(tmp, 'comment-report.json');
+  runCli([commentDir, '--report-out', commentReport]);
+  eq(JSON.parse(readFileSync(commentReport, 'utf8')).findings.length, 5, 'report contains only visible candidates');
+  writeFileSync(commentFile, '# Hidden Only\n\n<!-- currently TODO -->\n<!--\nrecently FIXME\n-->\n');
+  const hiddenGate = spawnSync(process.execPath, [scriptPath, commentDir, '--fail-on', 'placeholder-marker,stale-time-phrase'], { encoding: 'utf8' });
+  eq(hiddenGate.status, 0, 'hidden phrases cannot fail gate');
+  eq(JSON.parse(hiddenGate.stdout).candidates, [], 'hidden-only document has no candidates');
+
+  const similarityDir = join(tmp, 'comment-similarity');
+  mkdirSync(similarityDir);
+  const shared = Array.from({ length: 12 }, (_, i) => 'Shared content line ' + i);
+  for (const name of ['a', 'b']) {
+    writeFileSync(join(similarityDir, name + '.md'), '# ' + name + '\n\n<!--\n' + shared.join('\n') + '\n-->\n');
+  }
+  eq(JSON.parse(runCli([similarityDir])).candidates, [], 'shared hidden lines do not create near duplicates');
+  for (const name of ['a', 'b']) {
+    writeFileSync(join(similarityDir, name + '.md'), shared.map((line) => line + ' <!-- ' + name + ' -->').join('\n'));
+  }
+  const visibleSimilar = JSON.parse(runCli([similarityDir]));
+  eq(visibleSimilar.candidates.map((c) => c.kind), ['near-duplicate-files'], 'different inline comments do not hide visible near duplicates');
+  eq(JSON.parse(runCli([similarityDir, '--exact-near-duplicates'])), visibleSimilar, 'comment-aware prefix and exact similarity modes agree');
 }
 
 function main() {
