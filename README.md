@@ -94,7 +94,8 @@ md-doc-optimizer/
 │   ├── pre-scan.mjs              # 候选预扫：本地链接/锚点/重复/时间词等（只报候选；--fail-on 可做 CI 门禁）
 │   ├── pre-scan.test.mjs         # 预扫脚本自测（CI 门禁）
 │   ├── release-target.mjs        # 只读解析发布提交并核对版本
-│   └── release-target.test.mjs   # 发布目标解析回归测试
+│   ├── release-target.test.mjs   # 发布目标解析回归测试
+│   └── skill-version.mjs         # 自洽检查与发布共用的版本解析
 ├── references/
 │   ├── sources.md                # 同领域项目/工具调研（含出处）
 │   ├── audit-checklist.md        # 逐目标检查清单
@@ -112,27 +113,33 @@ md-doc-optimizer/
     ├── case-study-docproof.report.json   # 该案例的机器可读报告（Schema 校验）
     ├── case-study-zhlint.md              # 真实仓库案例：zhlint（报告模式）
     ├── case-study-zhlint.report.json     # 该案例的机器可读报告（Schema 校验）
-    └── report.sample.json                # 机器可读报告示例（Schema 校验用）
+    ├── report.sample.json                # 机器可读报告示例（Schema 校验用）
+    └── report-application/               # 报告落地状态契约正反例
+        ├── annotation.invalid.json
+        ├── partial.valid.json
+        └── unknown-status.invalid.json
 ~~~
 
 ## 质量门禁（本仓库 CI）
 
-[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 在 main 分支推送或提交 PR（改动命中 paths 过滤）时自动运行以下检查：
+[docs-qa 工作流](https://github.com/f-e-n-g-0531/md-doc-optimizer/actions/workflows/docs-qa.yml) 在推送到 main 分支或触发 PR 事件时自动运行以下检查。目录树自洽检查不限文件类型，因此工作流不按路径过滤：
 
 | 检查 | 命令 | 作用 |
 | --- | --- | --- |
-| 结构 lint | `npx markdownlint-cli2 "**/*.md"` | 标题层级、围栏、表格等结构问题 |
-| 链接检查 | `lychee --config ./lychee.toml --no-progress "**/*.md"` | 失效链接 |
-| 自洽检查 | `node scripts/check-docs.mjs` | SKILL.md 版本 == CHANGELOG 最新版本；引用的文件都存在；README 目录树与实际文件同步 |
+| 结构 lint | `npx markdownlint-cli2@0.24.1 "**/*.{md,markdown}"` | 标题层级、围栏、表格等结构问题 |
+| 链接检查 | `lychee --config ./lychee.toml --no-progress "**/*.md" "**/*.markdown"` | 失效链接 |
+| 自洽检查 | `node scripts/check-docs.mjs` | 核对技能版本、技能的 references 引用、README 的本地 `./` 内联链接与图片路径（存在性、类型、大小写）和目录树（目录链接只列自身，不遍历目标）、预扫 Schema 的类别映射 |
 | 自洽检查自测 | `node scripts/check-docs.test.mjs` | 畸形 Schema、契约漂移与目录遗漏的正反例回归 |
 | 发布目标自测 | `node scripts/release-target.test.mjs` | 发布提交选择与版本核验（仅临时仓库，无真实发布副作用） |
 | 预扫自测 | `node scripts/pre-scan.test.mjs` | 预扫脚本行为回归（临时夹具覆盖各类候选检测） |
 | 报告契约 | `npx ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"` | 机器可读报告（样例 + 两份真实案例）符合 JSON Schema |
-| 预扫契约与门禁 | `node scripts/pre-scan.mjs . --fail-on <结构性 kind>`（见 [tool-configs](./references/tool-configs.md)） | 输出先按 [pre-scan.schema.json](./references/pre-scan.schema.json) 校验；结构性失效类候选（死链/图片/锚点/大小写/空目标/未定义引用）直接让 CI 失败 |
+| 报告落地状态 | [AJV 正反例](./references/reporting.md#21-json-schema-与机器校验) | 校验部分落地报告，拒绝不合法的动作或状态 |
+| 预扫契约 | 在同一次预扫中组合 `--report-out <草稿路径>` 和 `--fail-on <结构性 kind>`，再用 AJV 校验两份输出 | 预扫输出和报告草稿各自符合 JSON Schema |
+| 预扫门禁 | `node scripts/pre-scan.mjs . --fail-on <结构性 kind>`（见 [tool-configs](./references/tool-configs.md)） | 拦截死链、失效图片、失效锚点、越界链接、大小写不符、空目标、未定义引用 |
 
-推送 `v*` 标签（或手动触发 release 工作流）会先过同一套检查，再发布 GitHub Release。
+推送 `v*` 标签或手动触发 release 工作流时，先解析发布目标。版本必须是 `vX.Y.Z`、不早于 `v1.17.0`，并与目标提交中的技能版本和最新变更日志版本一致。较早版本不支持当前预扫门禁，在解析阶段即被拒绝；标签推送还要求当前标签与触发事件指向同一提交；通过解析的目标提交仍须通过 QA 才能发布 GitHub Release。仅 `v1.17.0` 发布校验可跳过当时尚未加入的自洽与发布目标自测；常规 CI 必须执行这两项。 `v1.17.0`、`v1.18.0`、`v1.18.1` 发布校验仅对当时不存在的报告落地状态夹具另设例外。预扫门禁或预扫输出契约失败时，该次 CI 会尽量将已生成的结果保存在 `pre-scan-diagnostics` 工件中；执行异常时文件可能缺失或不完整。
 
-仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON，契约见 [pre-scan.schema.json](./references/pre-scan.schema.json)；`--text` 按 `文件:行 [类别] kind -- 证据 | 原文` 输出人读摘要（证据是命中的具体词或路径）；`--fail-on <kind,...>` 在命中指定类型时以退出码 1 失败，可直接做 CI 门禁（默认跳过 `fixture` 上下文，`--include-fixtures` 可包含；命中时 stderr 最多列 20 条明细，完整列表看 JSON）；支持 `<!-- pre-scan-ignore -->` 等行内抑制标记；存量仓库可先 `--write-baseline` 记录现状，再用 `--baseline`（需配合 `--fail-on`）只拦新增候选；near-duplicate 默认精确前缀过滤，需要全量对拍时加 `--exact-near-duplicates`；`--report-out draft.json` 可把候选转成 report.schema.json 兼容的报告草稿。候选覆盖死链/锚点（含 ATX 与 setext 标题、按 GitHub 锚点规则计算）、失效图片（含原始 HTML 内链/图片与 srcset）、空目标、引用式链接与未使用/重复定义、逃出仓库根的链接、大小写不一致的路径（跨平台一致）、硬编码分支链接、时间敏感词、占位标记、重复标题/段落、重复链接目标与疑似生成副本，供 P2 收集候选用。**候选必须再人工核对，不是结论。**
+仓库自带一个零依赖预扫脚本：`node scripts/pre-scan.mjs <目标目录>` 输出候选清单 JSON，契约见 [pre-scan.schema.json](./references/pre-scan.schema.json)；`--text` 按 `文件:行 [类别] kind -- 证据 | 原文` 输出人读摘要（证据是命中的具体词或路径）；`--fail-on <kind,...>` 在命中指定类型时以退出码 1 失败，可直接做 CI 门禁（默认跳过 `fixture` 上下文，`--include-fixtures` 可包含；命中时 stderr 最多列 20 条明细，stdout 保留全部扫描候选，格式取决于是否使用 `--text`）；支持 `<!-- pre-scan-ignore -->` 等行内抑制标记；存量仓库可先 `--write-baseline` 记录现状，再用 `--baseline`（需配合 `--fail-on`）只拦新增候选；近重复检测默认用精确前缀过滤；`--exact-near-duplicates` 则对符合最少行数门槛的文档两两比较；`--report-out draft.json` 可把候选转成 report.schema.json 兼容的报告草稿。候选覆盖死链/锚点（含 ATX 与 setext 标题、近似计算 GitHub 锚点，仅校验同次扫描中的 Markdown）、失效图片（含原始 HTML 内链/图片与 srcset）、空目标、引用式链接与未使用/重复定义、逃出仓库根的链接、大小写不一致的路径（跨平台一致）、硬编码分支链接、时间敏感词、占位标记、重复标题/段落、重复链接目标与疑似生成副本，供 P2 收集候选用。**候选必须再人工核对，不是结论。**
 
 ## 实测案例（真实仓库，报告模式）
 

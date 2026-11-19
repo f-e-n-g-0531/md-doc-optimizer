@@ -53,7 +53,7 @@
 - 正式报告中，同一行有多个问题合并为一条 finding，证据列全；`--report-out` 草稿暂按候选逐条保留，待 P3 核对后合并。
 - `evidence` 禁止「我觉得 / 可能 / 大概」式表述，必须是路径、命令、提交号或 URL。
 - 行号以审计时的文件内容为准；文件已被改动时重新定位后再输出。
-- 报告模式（只报告不改）下 `fixed` 记 0：`action` 为 `replace`/`delete` 表示建议改法，`replacement` 给出建议文本；用户确认落地后，再把对应条目标为已修并计入 `fixed`。
+- 报告模式（只报告不改）下 `fixed` 记 0：`action=replace` 或 `action=delete` 是已确认但未落地的建议，在人读汇总中记为「建议修改（未落地）」。`replace` 的建议文本放在 `replacement`；删除范围写在建议 diff 中。实际应用并复验后，才把对应条目计入 `fixed`。
 
 ### 2.1 JSON Schema 与机器校验
 
@@ -61,20 +61,22 @@
 
 ~~~bash
 npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"
+npx --yes ajv-cli@5 test --spec=draft2020 -s references/report.schema.json -d examples/report-application/partial.valid.json --valid
+npx --yes ajv-cli@5 test --spec=draft2020 -s references/report.schema.json -d examples/report-application/annotation.invalid.json -d examples/report-application/unknown-status.invalid.json --invalid
 ~~~
 
-Schema 强制约束：`summary` 五个计数字段必填；每条 finding 的 `file`/`line`/`category`/`severity`/`action`/`evidence` 必填；`action` 为 `replace` 时 `replacement` 必须是非空字符串。
+Schema 强制约束：`summary` 五个计数字段必填；每条 finding 的 `file`/`line`/`category`/`severity`/`action`/`evidence` 必填；`action` 为 `replace` 时 `replacement` 必须是非空字符串。 `application_status` 是可选扩展，只能用于 `replace`/`delete`；旧报告缺省表示未记录，不能按 `fixed` 总数反推逐条状态。草稿及现有样例格式不变；输出该字段前须确认接收方使用新版 Schema。Schema 不验证 `applied` 计数与 `fixed` 一致，交付时须复核。
 
 ### 2.2 报告落地（report → apply）
 
 用户确认建议 diff 后按以下顺序落地，避免报告与仓库脱节：
 
-1. 逐条应用 `replacement`（最小 diff），不夹带其他改动。
+1. 按批准的建议 diff 逐条应用：`replace` 使用 `replacement`，`delete` 删除建议所指范围。不夹带其他改动。
 2. 重跑 P5 验收（lint / 链接 / 示例），确认没有引入新失效。
-3. 更新报告 JSON：已落地条目计入 `summary.fixed`；用户拒绝的改成 `action=keep` 并在 `evidence` 写明原因；仍待确认的保持 `annotate`。
+3. 更新报告 JSON：仅把已应用且复验通过的条目计入 `summary.fixed`。接收方支持新版 Schema 时，将这类 `replace`/`delete` 标为 `application_status=applied`，尚未落地的建议标为 `proposed`；接收方仍用旧版时省略该字段，在人读清单中区分两种状态。拒绝的改成 `action=keep`，不带状态字段，并在 `evidence` 写明原因；仍待确认的保持 `annotate`。
 4. 用第 5 节的 PR/commit 模板交付；PR 描述里给出「原句 → 新句 → 证据」。
 
-预扫脚本（scripts/pre-scan.mjs）的默认输出只是 P3 的输入候选，不是正式 findings；`--report-out` 将候选转换为 `action=annotate` 的报告草稿，其中 `examined` 暂记候选数、`needs_human` 记全部候选。逐条核对、合并并更新计数后，才能作为正式报告交付。
+预扫脚本（scripts/pre-scan.mjs）的默认输出只是 P3 的输入候选，不是正式 findings；`--report-out` 将候选转换为 `action=annotate` 的报告草稿，其中 `examined` 暂记候选数、`needs_human` 记全部候选。草稿路径相对扫描目录；若扫描的是仓库子目录，交付前须换算为仓库根相对路径。逐条核对、合并并更新计数后，才能作为正式报告交付。
 
 ## 3. NEEDS_HUMAN 写法
 

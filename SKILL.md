@@ -4,7 +4,7 @@ description: Audit and optimize project Markdown documents — remove redundant 
 license: MIT
 metadata:
   author: f-e-n-g-0531
-  version: "1.18.1"
+  version: "1.19.0"
 ---
 
 # Markdown 文档优化器
@@ -153,14 +153,14 @@ metadata:
 
 - 只做 P1–P3，输出完整问题清单与建议 diff，不执行任何写操作。
 - 每条给「文件:行 + 类别 + 严重度 + 建议动作 + 证据」，可直接转为 issue 或 PR。
-- 结尾同样给汇总与结论；无问题时返回 NO_ISSUES。
+- 结尾汇总「建议修改（未落地）/ Needs review / No action」，分别统计已确认的修改建议、待人工确认项和判定不改项；不把建议计为已修。无问题时返回 NO_ISSUES。
 - 用户确认建议 diff 后，按 references/reporting.md「报告落地」流程逐条应用并复验。
 
 ## 工具编排（详见 references/tool-configs.md）
 
 | 目标 | 工具 | 作用 |
 |---|---|---|
-| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点（含原始 HTML 内链、setext 标题）、越界链接、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、重复链接目标、疑似生成副本；只报候选；`--fail-on` 可直接做 CI 门禁（默认跳过测试夹具），`--baseline`（配合 `--fail-on`）可只拦新增；`--exact-near-duplicates` 可全量对拍相似度；`--report-out` 可输出报告草稿；支持行内抑制标记 |
+| 候选预扫 | scripts/pre-scan.mjs | 本地死链/图片/锚点（含原始 HTML 内链、setext 标题）、越界链接、空目标、引用式链接与未使用/重复定义、跨平台大小写路径、硬编码 master 链接、时间词、占位标记、重复标题/段落、重复链接目标、疑似生成副本；只报候选；`--fail-on` 可直接做 CI 门禁（默认跳过标为 `fixture` 的候选，规则见工具配置），`--baseline`（配合 `--fail-on`）可只拦新增；`--exact-near-duplicates` 可对符合行数门槛的文档两两比较相似度；`--report-out` 可输出报告草稿；支持行内抑制标记 |
 | 结构去重 | markdownlint / remark-lint | MD024 重复标题、MD025 多 H1、未使用定义等 |
 | 文风/冗余 | Vale + write-good/proselint/alex | 口水词、被动语态、客套、歧视用语 |
 | 链接失效 | lychee、markdown-link-check | 找 404/死链/锚点失效 |

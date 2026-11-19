@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Zero-dependency regression tests; all mutations stay in a disposable fixture.
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ const source = fileURLToPath(new URL('../', import.meta.url));
 const temp = mkdtempSync(join(tmpdir(), 'check-docs-test-'));
 const root = join(temp, 'md-doc-optimizer');
 const schema = JSON.parse(readFileSync(join(source, 'references/pre-scan.schema.json'), 'utf8'));
-const tree = 'md-doc-optimizer/\n├── scripts/\n│   ├── check-docs.mjs\n│   └── pre-scan.mjs\n├── references/\n│   ├── report.schema.json\n│   └── pre-scan.schema.json\n└── examples/\n    └── report.sample.json';
+const tree = 'md-doc-optimizer/\n├── scripts/\n│   ├── check-docs.mjs\n│   ├── pre-scan.mjs\n│   └── skill-version.mjs\n├── references/\n│   ├── report.schema.json\n│   └── pre-scan.schema.json\n└── examples/\n    └── report.sample.json';
 const write = (path, value) => {
   mkdirSync(join(root, path, '..'), { recursive: true });
   writeFileSync(join(root, path), value);
@@ -22,6 +22,7 @@ function run(name, mutate = () => {}, diagnostic) {
   rmSync(root, { recursive: true, force: true });
   write('scripts/check-docs.mjs', readFileSync(join(source, 'scripts/check-docs.mjs')));
   write('scripts/pre-scan.mjs', readFileSync(join(source, 'scripts/pre-scan.mjs')));
+  write('scripts/skill-version.mjs', readFileSync(join(source, 'scripts/skill-version.mjs')));
   write('SKILL.md', '---\nname: md-doc-optimizer\nmetadata:\n  version: "1.0.0"\n---\nreferences/report.schema.json\nreferences/pre-scan.schema.json\n');
   write('CHANGELOG.md', '## 1.0.0\n');
   write('references/report.schema.json', '{}');
@@ -45,6 +46,95 @@ const changeSchema = (mutate) => {
 };
 try {
   run('valid');
+  run('invalid Markdown bytes', () => {
+    readme(tree, '\nVisible: ');
+    const path = join(root, 'README.md');
+    writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from([0xc3, 0x28])]));
+  }, 'README.md 不是有效 UTF-8');
+  run('invalid JSON string bytes', () => {
+    write('examples/report.sample.json', Buffer.concat([Buffer.from('{"note":"'), Buffer.from([0xff]), Buffer.from('"}')]));
+  }, 'examples/report.sample.json 不是有效 UTF-8');
+  run('Markdown BOM and literal replacement character remain valid', () => {
+    readme(tree, '\n原文字符 � 😀\n');
+    const path = join(root, 'README.md');
+    writeFileSync(path, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), readFileSync(path)]));
+  });
+  run('README path is a directory', () => {
+    rmSync(join(root, 'README.md'));
+    mkdirSync(join(root, 'README.md'));
+  }, '无法读取文件: README.md');
+  const treeBlock = (marker, listing = tree, close = marker) =>
+    ['## 目录结构', '', marker + 'text', listing, close].join('\n');
+  run('backtick tree fence with tilde text', () => {
+    write('README.md', treeBlock('```', tree.replace('scripts/', 'scripts/ # literal ~~~ text')));
+  });
+  run('commented tree does not shadow visible tree', () => {
+    write('README.md', '<!--\n' + treeBlock('~~~', '├── removed.md') + '\n-->\n\n' + treeBlock('~~~'));
+  });
+  run('tree example in outer fence does not shadow visible tree', () => {
+    write('README.md', '~~~~md\n' + treeBlock('~~~', '├── removed.md') + '\n~~~~\n\n' + treeBlock('~~~'));
+  });
+  run('commented tree alone is not sufficient', () => {
+    write('README.md', '<!--\n' + treeBlock('~~~') + '\n-->');
+  }, '找不到「目录结构」围栏块');
+  run('tree requires a closing fence of sufficient length', () => {
+    write('README.md', treeBlock('~~~~', tree, '~~~'));
+  }, '找不到「目录结构」围栏块');
+  run('hidden changelog versions', () => write('CHANGELOG.md', [
+    '\uFEFF<!--', '## 9.0.0', '-->', '', '~~~md', '## 9.1.0', '~~~', '  ## 1.0.0', '',
+  ].join('\r\n')));
+  run('only hidden changelog versions', () => write('CHANGELOG.md', '~~~md\n## 1.0.0\n'), '找不到版本标题');
+  for (const body of ['other:\n  version: "1.0.0"', 'metadata:\n  nested:\n    version: "1.0.0"']) {
+    run('version outside direct metadata children: ' + body, () => {
+      write('SKILL.md', '---\nname: md-doc-optimizer\n' + body + '\n---\n' +
+        'references/report.schema.json\nreferences/pre-scan.schema.json\n');
+    }, '缺少 metadata.version');
+  }
+  for (const duplicate of ['metadata:\n  version: "9.0.0"', 'metadata: {version: "9.0.0"}', '"metadata": {}', "'metadata': null", 'metadata : {}']) {
+    run('duplicate top-level metadata: ' + duplicate, () => {
+      write('SKILL.md', '---\nname: md-doc-optimizer\nmetadata:\n  version: "1.0.0"\n' + duplicate + '\n---\n' +
+        'references/report.schema.json\nreferences/pre-scan.schema.json\n');
+    }, '缺少 metadata.version');
+  }
+  run('nested metadata does not conflict', () => {
+    write('SKILL.md', '---\nname: md-doc-optimizer\nother:\n  metadata: {}\nmetadata:\n  version: "1.0.0"\n---\n' +
+      'references/report.schema.json\nreferences/pre-scan.schema.json\n');
+  });
+  for (const duplicate of ['"version": "9.0.0"', "'version': null", 'version : "1.0.0"']) {
+    for (const reverse of [false, true]) {
+      run('duplicate direct version: ' + duplicate + ', reverse=' + reverse, () => {
+        const versions = ['version: "1.0.0"', duplicate];
+        if (reverse) versions.reverse();
+        write('SKILL.md', '---\nname: md-doc-optimizer\nmetadata:\n  ' + versions.join('\n  ') + '\n---\n' +
+          'references/report.schema.json\nreferences/pre-scan.schema.json\n');
+      }, '缺少 metadata.version');
+    }
+  }
+  run('nested version does not conflict with direct version', () => {
+    write('SKILL.md', '---\nname: md-doc-optimizer\nmetadata:\n  nested:\n    "version": "9.0.0"\n  version: "1.0.0"\n---\n' +
+      'references/report.schema.json\nreferences/pre-scan.schema.json\n');
+  });
+  for (const suffix of ['-rc.1', '+build.1', '.1']) {
+    run('different latest changelog version ' + suffix, () => {
+      write('CHANGELOG.md', '## 1.0.0' + suffix + '\n\n## 1.0.0\n');
+    }, '版本不一致');
+  }
+  run('list heading cannot shadow the top-level release version', () => {
+    write('CHANGELOG.md', '- Example heading\n\n  ## 9.0.0\n\n ## 1.0.0\n');
+  });
+  run('generic HTML and nested lists cannot shadow the current version', () => {
+    write('CHANGELOG.md', '<div>\n## 8.0.0\n</div>\n\n- Example\n  - nested\n  ## 9.0.0\n\n## 1.0.0\n');
+  });
+  run('raw HTML cannot shadow the current version', () => {
+    write('CHANGELOG.md', '<pre>\n## 9.0.0\n</pre>\n\n## 1.0.0\n');
+  });
+  run('an inline comment is not part of the version token', () => {
+    write('CHANGELOG.md', '## 1.0.0<!-- note -->\n');
+  });
+  run('category extraction is independent of source quoting and line endings', () => {
+    const script = readFileSync(join(root, 'scripts/pre-scan.mjs'), 'utf8');
+    write('scripts/pre-scan.mjs', script.replace("'broken-local-link': 'B'", '"broken-local-link": "B"').replace(/\r?\n/g, '\r\n'));
+  });
   run('invalid JSON', () => write('references/pre-scan.schema.json', '{'), '不是合法 JSON');
   run('missing schema', () => rmSync(join(root, 'references/pre-scan.schema.json')), '缺失文件');
   for (const value of [null, false, 0, '', [], {}]) {
@@ -53,6 +143,9 @@ try {
   for (const value of [null, false, 42, [], {}]) {
     run('malformed allOf ' + JSON.stringify(value), () => changeSchema((s) => { s.$defs.candidate.allOf[0] = value; }), 'allOf 条目');
   }
+  run('candidate category enum must include every scanner category', () => {
+    changeSchema((s) => { s.$defs.candidate.properties.category.enum = ['B']; });
+  }, 'candidate.category 枚举必须匹配 CATEGORY');
   run('conflicting nested category enum', () => changeSchema((s) => {
     s.$defs.candidate.allOf[0].then.properties.category.enum = ['A'];
   }), 'allOf 映射结构');
@@ -114,15 +207,92 @@ try {
   run('extra kind constraint', () => changeSchema((s) => { s.$defs.candidate.properties.kind.enum = []; }), '必须且只能引用');
   run('basename collision', () => write('other/report.sample.json', '{}'), 'README 目录结构未列出: other/report.sample.json');
   run('substring collision', () => write('examples/sample.json', '{}'), 'README 目录结构未列出: examples/sample.json');
-  run('combined listing', () => readme(tree + '\n├── LICENSE / CHANGELOG.md'));
+  run('missing nested README', () => write('examples/README.md', '# Example\n'), 'README 目录结构未列出: examples/README.md');
+  run('missing non-Markdown file', () => write('examples/notes.txt', 'fixture'), 'README 目录结构未列出: examples/notes.txt');
+  run('stale directory tree entry', () => readme(tree + '\n├── removed.md'), 'README 目录结构列出了不存在的文件: removed.md');
+  run('stale directory entry', () => readme(tree + '\n├── removed/'), 'README 目录结构列出了不存在的目录: removed');
+  run('file shown as directory', () => {
+    write('LICENSE', 'fixture');
+    readme(tree + '\n├── LICENSE/');
+  }, 'README 目录结构列出了不存在的目录: LICENSE');
+  run('orphan indentation cannot promote an entry to root', () => {
+    write('LICENSE', 'fixture');
+    readme(tree.replace('├── scripts/', '│   ├── LICENSE\n├── scripts/'));
+  }, 'README 目录结构层级无效');
+  run('duplicate leaf entries are reported', () => {
+    readme(tree.replace('│   ├── pre-scan.mjs', '│   ├── pre-scan.mjs / pre-scan.mjs'));
+  }, 'README 目录结构重复列出: scripts/pre-scan.mjs');
+  run('duplicate directory entries are reported', () => {
+    readme(tree + '\n├── scripts/');
+  }, 'README 目录结构重复列出: scripts');
+  run('existing empty directory can be documented', () => {
+    mkdirSync(join(root, 'empty'));
+    readme(tree + '\n├── empty/');
+  });
+  run('combined listing', () => {
+    write('LICENSE', 'fixture');
+    readme(tree + '\n├── LICENSE / CHANGELOG.md');
+  });
+  // Windows 用 junction，避免测试依赖创建目录符号链接的特权。
+  const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
+  const sibling = join(temp, 'external');
+  mkdirSync(sibling);
+  writeFileSync(join(sibling, 'not-in-project.md'), '# Outside\n');
+  run('directory link is counted without following its contents', () => {
+    symlinkSync(sibling, join(root, 'external-link'), directoryLink);
+    readme(tree + '\n├── external-link');
+  });
+  run('unlisted directory link is reported by its own path', () => {
+    symlinkSync(sibling, join(root, 'external-link'), directoryLink);
+  }, 'README 目录结构未列出: external-link\n');
+  run('directory link back to repository root is not traversed', () => {
+    symlinkSync(root, join(root, 'self-link'), directoryLink);
+    readme(tree + '\n├── self-link');
+  });
   const parenTree = tree + '\n├── faq(1).md';
   run('parenthesized link target', () => {
     readme(parenTree, '[faq](./faq(1).md)');
     write('faq(1).md', '# FAQ\n');
   });
   run('missing parenthesized link target', () => {
-    readme(parenTree, '[bad](./no(1).md)');
+    readme(tree, '[bad](./no(1).md)');
   }, 'README 本地链接失效: no(1).md');
+  run('README example links are not targets', () => readme(tree, [
+    '~~~md', '[example](./no-fenced.md)', '~~~', '',
+    '`[example](./no-code.md)`', '', '<!-- [example](./no-comment.md) -->',
+  ].join('\n')));
+  run('encoded and quoted README targets', () => readme(tree, [
+    '[encoded](./references/%72eport.schema.json)',
+    '[query and fragment](./references/report.schema.json?view=raw#schema)',
+    '[title](<./references/report.schema.json> "Schema")',
+  ].join('\n')));
+  run('README checks a plain multiline inline target', () => {
+    readme(tree, '[broken](\n./missing-multi.md)');
+  }, 'README 本地链接失效: missing-multi.md');
+  run('README ignores Markdown examples in HTML attributes', () => {
+    readme(tree, '<span title="[example](./not-a-target.md)">Text</span>');
+  });
+  run('README image cannot point to a directory', () => {
+    readme(tree, '![invalid](./references/)');
+  }, 'README 本地链接失效: references/');
+  run('README file path cannot have a directory suffix', () => {
+    readme(tree, '[invalid](./references/report.schema.json/)');
+  }, 'README 本地链接失效: references/report.schema.json/');
+  run('README uses actual casing', () => {
+    readme(tree, '[invalid](./REFERENCES/report.schema.json)');
+  }, 'case differs');
+  run('missing README target with a parenthesized title', () => {
+    readme(tree, '[broken](./no-title.md (example title))');
+  }, 'README 本地链接失效: no-title.md');
+  run('missing README target with title', () => {
+    readme(tree, '[broken](./no-title.md "example title")');
+  }, 'README 本地链接失效: no-title.md');
+  run('README badges validate the outer target', () => {
+    readme(tree, '[![badge](https://example.invalid/badge.svg)](./no-badge-target.md)');
+  }, 'README 本地链接失效: no-badge-target.md');
+  run('README candidate suppression does not disable consistency checks', () => {
+    readme(tree, '[broken](./no-suppressed.md) <!-- pre-scan-ignore -->');
+  }, 'README 本地链接失效: no-suppressed.md');
   // 比较可复制模板和真实工作流，忽略空行及整行说明/可选注释。
   const configs = readFileSync(join(source, 'references/tool-configs.md'), 'utf8').replace(/\r\n/g, '\n');
   const workflowSection = configs.slice(configs.indexOf('## GitHub Actions'));
@@ -130,8 +300,32 @@ try {
   assert.ok(template, 'copyable CI template exists');
   const normalizeWorkflow = (text) => text.replace(/\r\n/g, '\n').split('\n')
     .filter((line) => line.trim() && !/^\s*#/.test(line)).join('\n');
-  assert.equal(normalizeWorkflow(template), normalizeWorkflow(readFileSync(join(source, '.github/workflows/docs-qa.yml'), 'utf8')),
+  const qa = normalizeWorkflow(readFileSync(join(source, '.github/workflows/docs-qa.yml'), 'utf8'));
+  assert.equal(normalizeWorkflow(template), qa,
     'copyable CI template matches the real workflow, including release ref and all self-tests');
+  scenarios++;
+  const release = normalizeWorkflow(readFileSync(join(source, '.github/workflows/release.yml'), 'utf8'));
+  assert.match(qa, /legacy_missing_self_tests:\n[^\n]*\n        required: false\n        type: boolean\n        default: false/);
+  for (const scriptName of ['check-docs.test.mjs', 'release-target.test.mjs']) {
+    assert.ok(qa.includes("if: ${{ !inputs.legacy_missing_self_tests || hashFiles('scripts/" + scriptName +
+      "') != '' }}\n        run: node scripts/" + scriptName), 'regular QA requires ' + scriptName + ' even if missing');
+  }
+  assert.ok(release.includes("legacy_missing_self_tests: ${{ needs.resolve.outputs.version == 'v1.17.0' }}"));
+  assert.match(qa, /legacy_missing_application_tests:\n[^\n]*\n        required: false\n        type: boolean\n        default: false/);
+  assert.ok(qa.includes('!inputs.legacy_missing_application_tests'));
+  const applicationException = release.split('\n').find((line) => line.includes('legacy_missing_application_tests:'));
+  assert.deepEqual(applicationException?.match(/v\d+\.\d+\.\d+/g), ['v1.17.0', 'v1.18.0', 'v1.18.1']);
+  const scanStep = qa.indexOf('id: pre_scan');
+  const retained = qa.indexOf('name: retain failed pre-scan outputs');
+  assert.ok(scanStep >= 0 && scanStep < retained, 'the artifact step follows the named pre-scan step');
+  const artifact = qa.slice(retained, qa.indexOf('name: validate report schema', retained));
+  assert.ok(artifact.includes("failure() && steps.pre_scan.outcome == 'failure'"));
+  assert.ok(artifact.includes('actions/upload-artifact@v4'));
+  for (const name of ['pre-scan-out.json', 'pre-scan-report.json']) {
+    assert.ok(artifact.includes('/' + name) && qa.slice(scanStep, retained).includes('/' + name));
+  }
+  scenarios++;
+  scenarios++;
   scenarios++;
   console.log('check-docs self-test: OK (' + scenarios + ' scenarios)');
 } finally {

@@ -64,7 +64,7 @@ Widget CLI is currently in beta. The latest version is 1.2, and v2 is coming soo
 | 路径 / import | 文件系统与依赖清单 | 路径用 `ls` 核对；import 在包入口与依赖清单核对：`rg -n "from ['\"]pkg" src/` |
 | API 端点 | 路由定义 / OpenAPI | `rg -n "/(v[0-9]+/)?[a-z-]+" src/routes/`；可用 Redocly respect 做行为回归 |
 | 示例输出 | 实际运行 | 执行命令保存 stdout/stderr，与文档逐行 diff；跑不通记 run-failed 作为证据 |
-| 数字/日期/时区/货币 | CHANGELOG、git log、权威页面 | `git log --format=%ad` 核对发布日期；跨时区写明时区（如 09:00 UTC） |
+| 数字/日期/时区/货币 | CHANGELOG、git log、权威页面 | Git 作者日期不等于发布日期；按声明查 Release 或包仓发布元数据；跨时区写明时区（如 09:00 UTC） |
 | 产品名大小写 | 官方品牌写法 | `git grep -nE "Github\|Javascript\|MacOS\|NodeJS\|NPM" -- "*.md"` |
 | 链接文本 vs 目标 | 目标页标题与内容 | curl 或 web_fetch 打开确认；lychee 只证明可达，不证明语义匹配 |
 | 限额/价格/配额 | 官方 pricing / limits 页 | 记录授权 URL 与访问日期；二手博客不算证据 |
@@ -93,7 +93,7 @@ Widget CLI is currently in beta. The latest version is 1.2, and v2 is coming soo
 |---|---|---|---|
 | A 结构与重复标题 | markdownlint | `npx --yes markdownlint-cli2 "**/*.md"` | MD024 重复标题、MD025 多 H1；只报结构，不判语义重复 |
 | A/B/C 文风 | Vale | `vale .`（先按 .vale.ini 备好 styles/ 与 Vocab） | 需风格包，否则报错；配置见 tool-configs.md |
-| A/B 冗余词 | write-good / proselint（Vale 风格包） | 随 `vale .` 生效；不单独装 CLI | `write-good.Passive = NO`、`proselint.Very = YES` 已在 .vale.ini 设定 |
+| A/B 冗余词 | write-good / proselint（Vale 风格包） | 随 `vale .` 生效；不单独装 CLI | tool-configs.md 的 .vale.ini 模板示例设置了 `write-good.Passive = NO`、`proselint.Very = YES` |
 | A 得体用语 | alex（Vale 风格包） | 随 `vale .` 生效 | 只作候选，替换属 Low |
 | B 死链 | lychee | `lychee --config ./lychee.toml --no-progress "**/*.md"` | 只证明可达，不证明文本与目标匹配 |
 | B 死链（单文件） | markdown-link-check | `npx markdown-link-check README.md` | 批量需自行循环 |
@@ -103,7 +103,7 @@ Widget CLI is currently in beta. The latest version is 1.2, and v2 is coming soo
 | C 示例复跑 | mdoctest / markdown-doctest | `mdoctest README.md`（核对输出）；`npx markdown-doctest README.md`（仅验证不抛异常） | mdoctest 比对输出；markdown-doctest 只验证可执行，不证明输出正确 |
 
 - 所有 linter 输出都是候选清单，不是结论；不得把 `--fix` 类自动修复直接套到技术文档（CJK 工具实测见 references/cjk-doc-rules.md 第 7 节，英文同理）。
-- CI 用 `.github/workflows/docs-qa.yml`：markdownlint、链接检查、文档自洽检查（scripts/check-docs.mjs）、预扫自测（scripts/pre-scan.test.mjs）与报告 Schema 校验都是门禁；Vale 需先备风格包、默认注释，按需启用。
+- CI 用 `.github/workflows/docs-qa.yml`：markdownlint、链接检查、文档自洽检查（scripts/check-docs.mjs）、预扫自测（scripts/pre-scan.test.mjs）与报告 Schema 校验都是门禁；Vale 不在本仓库 CI 中，可按 tool-configs.md 的模板另行启用。
 - 新增工具前先核对官方文档参数；拿不准就写「按官方文档启用」，不编造命令。
 
 ## 7. 英文文档审计清单

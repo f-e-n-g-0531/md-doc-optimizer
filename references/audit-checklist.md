@@ -55,4 +55,4 @@
 
 ## 汇总落点
 
-每条最终归入三段汇总之一：Fixed（已改）/ Needs review（NEEDS_HUMAN）/ No action（判定无需改）；超出本文档职责的另记 Out of scope，不计入这三段。
+每条最终归入三段汇总之一：Fixed（已改）/ Needs review（NEEDS_HUMAN）/ No action（判定无需改）。只读报告模式用「建议修改（未落地）」替代 Fixed；超出本文档职责的另记 Out of scope，不计入这三段。

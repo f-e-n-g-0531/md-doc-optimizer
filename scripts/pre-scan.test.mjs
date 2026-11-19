@@ -2,7 +2,8 @@
 // scripts/pre-scan.test.mjs — pre-scan 自测：构造临时夹具，校验输出契约、各类检测与确定性。
 // 运行：node scripts/pre-scan.test.mjs（成功退出 0，失败退出 1）
 import assert from 'node:assert';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, sep } from 'node:path';
@@ -50,6 +51,9 @@ const CATEGORY_OF = {
   'multiple-h1': 'A',
   'near-duplicate-files': 'A',
 };
+
+const paragraphEvidence = (line, text) => 'repeat of paragraph at line ' + line +
+  ': sha256=' + createHash('sha256').update(text).digest('hex');
 
 let assertions = 0;
 function ok(condition, message) {
@@ -196,8 +200,8 @@ function runAssertions(tmp) {
     '![missing image](./img/no(1).png)', '',
   ].join('\n'));
   addFile('docs/paren-heading.md', [
-    '# See [FAQ](./faq(1).md)', '',
-    '[ok](#see-faq)', '',
+    '# See [FAQ [Guide]](./faq(1).md)', '',
+    '[ok](#see-faq-guide)', '',
     '[pre-fix slug](#see-faq-md-here)', '',
   ].join('\n'));
   addFile('docs/commented-headings.md',
@@ -412,7 +416,7 @@ function runAssertions(tmp) {
     eq(candidate.category, CATEGORY_OF[candidate.kind], 'category fixed for ' + candidate.kind);
     ok(candidate.context === 'docs' || candidate.context === 'fixture', 'context value: ' + candidate.context);
     ok(Number.isInteger(candidate.line) && candidate.line >= 1, 'line is 1-based integer: ' + candidate.file);
-    ok(candidate.excerpt.length <= 160, 'excerpt <= 160 chars: ' + candidate.file + ':' + candidate.line);
+    ok([...candidate.excerpt].length <= 160, 'excerpt <= 160 chars: ' + candidate.file + ':' + candidate.line);
     ok(typeof candidate.evidence === 'string' && candidate.evidence.length > 0, 'evidence non-empty');
 
     const content = files.get(candidate.file);
@@ -657,6 +661,65 @@ function runAssertions(tmp) {
     'case mismatch evidence shows linked name -> on-disk name');
   eq(ofFile('docs/case-target.md'), [], 'correctly-cased target file itself is clean');
 
+  const caseIdentityDir = join(tmp, 'node_modules', 'case-target-identity');
+  for (const dir of ['one', 'two']) {
+    mkdirSync(join(caseIdentityDir, dir), { recursive: true });
+    writeFileSync(join(caseIdentityDir, dir, 'note.md'), '# Note\n');
+  }
+  const caseIdentityDoc = join(caseIdentityDir, 'links.md');
+  const caseIdentityBase = join(tmp, 'case-identity.json');
+  writeFileSync(caseIdentityDoc, '[one](./one/NOTE.md)\n');
+  runCli([caseIdentityDir, '--write-baseline', caseIdentityBase]);
+  writeFileSync(caseIdentityDoc, '[two](./two/NOTE.md)\n');
+  const caseGate = spawnSync(process.execPath, [scriptPath, caseIdentityDir, '--fail-on', 'case-mismatch-link',
+    '--baseline', caseIdentityBase], { encoding: 'utf8' });
+  eq(caseGate.status, 1, 'a distinct wrong-case destination is not waived by an older baseline');
+  writeFileSync(caseIdentityDoc, '[one](./one/NOTE.md) [two](./two/NOTE.md)\n');
+  const wrongCase = JSON.parse(runCli([caseIdentityDir])).candidates;
+  eq(wrongCase.length, 2, 'wrong-case paths sharing the same basename do not collapse');
+
+  // 独立夹具不应改变前后全量扫描的基准计数。
+  const targetTypesDir = join(tmp, 'node_modules', 'target-types');
+  mkdirSync(join(targetTypesDir, 'assets'), { recursive: true });
+  writeFileSync(join(targetTypesDir, 'assets', 'present.png'), 'fixture');
+  writeFileSync(join(targetTypesDir, 'page.md'), '# Page\n');
+  writeFileSync(join(targetTypesDir, 'links.md'), [
+    '[file](./page.md)', '[directory](./assets/)', '![image](./assets/present.png)',
+    '[file with slash](./page.md/)', '[encoded slash](./page.md%2F?raw#page)',
+    '![directory image](./assets)', '<img src="./assets/">',
+    '![file image with slash](./assets/present.png/)',
+    '[file dot](./page.md/.)', '[encoded file dot](./page.md/%2e)', '[valid directory dot](./assets/.)',
+  ].join('\n'));
+  const badTypes = spawnSync(process.execPath,
+    [scriptPath, targetTypesDir, '--fail-on', 'broken-local-link,broken-local-image'], { encoding: 'utf8' });
+  eq(badTypes.status, 1, 'a file with a trailing slash or a directory image fails the gate');
+  eq(JSON.parse(badTypes.stdout).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [4, 'broken-local-link', 'relative link target is not a directory: ./page.md/'],
+    [5, 'broken-local-link', 'relative link target is not a directory: ./page.md%2F'],
+    [6, 'broken-local-image', 'relative image target is not a file: ./assets'],
+    [7, 'broken-local-image', 'relative image target is not a file: ./assets/'],
+    [8, 'broken-local-image', 'relative image target is not a file: ./assets/present.png/'],
+    [9, 'broken-local-link', 'relative link target is not a directory: ./page.md/.'],
+    [10, 'broken-local-link', 'relative link target is not a directory: ./page.md/%2e'],
+  ], 'relative links may point to directories, but slash suffixes and image destinations require the appropriate target type');
+
+  const dirLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+  symlinkSync(join(targetTypesDir, 'assets'), join(targetTypesDir, 'live-link'), dirLinkType);
+  symlinkSync(join(targetTypesDir, 'no-directory'), join(targetTypesDir, 'dangling-link'), dirLinkType);
+  writeFileSync(join(targetTypesDir, 'links.md'), [
+    '[directory link](./live-link)', '[directory link with slash](./live-link/)',
+    '[dangling](./dangling-link)', '[dangling with slash](./dangling-link/)',
+    '![dangling image](./dangling-link)',
+  ].join('\n'));
+  const danglingGate = spawnSync(process.execPath,
+    [scriptPath, targetTypesDir, '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
+  eq(danglingGate.status, 1, 'a link to a dangling entry fails the gate');
+  eq(JSON.parse(danglingGate.stdout).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [3, 'broken-local-link', 'relative link target not found: ./dangling-link'],
+    [4, 'broken-local-link', 'relative link target not found: ./dangling-link/'],
+    [5, 'broken-local-image', 'relative image target not found: ./dangling-link'],
+  ], 'linked directories must resolve; dangling targets are missing rather than wrong type');
+
   const masterLinks = ofFile('docs/master.md');
   eq(masterLinks.map((c) => c.kind), ['default-branch-master-link'], 'master-branch link detected');
   eq(masterLinks[0].evidence, 'hardcoded /master/ path; verify repository default branch', 'master evidence');
@@ -779,15 +842,15 @@ function runAssertions(tmp) {
   ].join('\n'));
   const repeatScan = JSON.parse(runCli([repeatsDir]));
   eq(repeatScan.candidates.map(({ line, kind, evidence }) => [line, kind, evidence]), [
-    [6, 'duplicate-heading', 'repeat of heading at line 2'],
-    [8, 'duplicate-heading', 'repeat of heading at line 4'],
-    [10, 'duplicate-heading', 'repeat of heading at line 2'],
-    [17, 'duplicate-paragraph', 'repeat of paragraph at line 13'],
-    [19, 'duplicate-paragraph', 'repeat of paragraph at line 15'],
-    [21, 'duplicate-paragraph', 'repeat of paragraph at line 13'],
-    [26, 'multiple-h1', 'additional H1; first H1 at line 24'],
-    [28, 'duplicate-heading', 'repeat of heading at line 24'],
-    [28, 'multiple-h1', 'additional H1; first H1 at line 24'],
+    [6, 'duplicate-heading', 'repeat of heading at line 2: 2|alpha'],
+    [8, 'duplicate-heading', 'repeat of heading at line 4: 2|beta'],
+    [10, 'duplicate-heading', 'repeat of heading at line 2: 2|alpha'],
+    [17, 'duplicate-paragraph', paragraphEvidence(13, paragraphA)],
+    [19, 'duplicate-paragraph', paragraphEvidence(15, paragraphB)],
+    [21, 'duplicate-paragraph', paragraphEvidence(13, paragraphA)],
+    [26, 'multiple-h1', 'additional H1; first H1 at line 24: other'],
+    [28, 'duplicate-heading', 'repeat of heading at line 24: 1|main'],
+    [28, 'multiple-h1', 'additional H1; first H1 at line 24: main'],
   ], 'interleaved repeats retain first occurrence evidence and suppression semantics');
 
   // 同一行保留词形与跨类别命中；最终候选仅合并相同 evidence，不吞独立 soon。
@@ -804,6 +867,103 @@ function runAssertions(tmp) {
     [3, 'stale-time-phrase', 'soon'],
     [3, 'stale-time-phrase', '目前'],
   ], 'phrase order, case, separate categories and code/URL masking remain stable');
+
+  const codeSpans = join(tmp, 'inline-code-runs');
+  mkdirSync(codeSpans);
+  writeFileSync(join(codeSpans, 'runs.md'), [
+    'Text `` TODO [hidden](./missing.md) `` and FIXME',
+    'Text ``` currently ` literal `` still hidden ``` then TBD',
+    'Text ` TODO `` stays visible',
+    'Text \\` TODO ` stays visible',
+    'Text \\`` FIXME ` is code after the escaped backtick',
+    'Text ` TBD \\` and FIXME',
+  ].join('\n\n'));
+  eq(JSON.parse(runCli([codeSpans])).candidates.map(({ line, kind, evidence }) => [line, kind, evidence]), [
+    [1, 'placeholder-marker', 'FIXME'],
+    [3, 'placeholder-marker', 'TBD'],
+    [5, 'placeholder-marker', 'TODO'],
+    [7, 'placeholder-marker', 'TODO'],
+    [11, 'placeholder-marker', 'FIXME'],
+  ], 'single-line code spans only pair complete equal-length backtick runs');
+
+  const spanDir = join(tmp, 'multiline-code-spans');
+  mkdirSync(spanDir);
+  const spanInput = [
+    'Example `` TODO <!--', '[hidden](./hidden.md) <!-- pre-scan-disable -->',
+    'end `` FIXME [visible](./visible.md)', '',
+    'Unclosed ` TODO', '', '~~~md', '[fenced](./fenced.md)', '~~~', '',
+    'A real comment <!-- `', '[commented](./commented.md)', '--> TBD [after](./after.md)', '',
+    'Unmatched `` TODO', 'one backtick ` [still visible](./still.md)', '',
+    'Before ` TODO', '## Heading', 'after ` FIXME',
+  ];
+  for (const eol of ['\n', '\r\n']) {
+    writeFileSync(join(spanDir, 'spans.md'), spanInput.join(eol));
+    eq(JSON.parse(runCli([spanDir])).candidates.map(({ line, kind }) => [line, kind]), [
+      [3, 'broken-local-link'], [3, 'placeholder-marker'], [5, 'placeholder-marker'],
+      [13, 'broken-local-link'], [13, 'placeholder-marker'], [15, 'placeholder-marker'],
+      [16, 'broken-local-link'], [18, 'placeholder-marker'], [20, 'placeholder-marker'],
+    ], 'paragraph code, comment precedence, unmatched runs and line numbers are stable');
+  }
+
+  const anchorIdentityDir = join(tmp, 'anchor-identity');
+  mkdirSync(anchorIdentityDir);
+  for (const name of ['a.md', 'b.md']) writeFileSync(join(anchorIdentityDir, name), '# Valid\n');
+  const anchorIdentityDoc = join(anchorIdentityDir, 'links.md');
+  const anchorIdentityBaseline = join(tmp, 'anchor-identity.json');
+  writeFileSync(anchorIdentityDoc, '[first](./a.md#missing)\n');
+  runCli([anchorIdentityDir, '--write-baseline', anchorIdentityBaseline]);
+  writeFileSync(anchorIdentityDoc, '[second](./b.md#missing)\n');
+  const changedAnchor = spawnSync(process.execPath, [scriptPath, anchorIdentityDir, '--fail-on', 'broken-anchor',
+    '--baseline', anchorIdentityBaseline], { encoding: 'utf8' });
+  eq(changedAnchor.status, 1, 'target file changes must not be hidden by an older anchor baseline');
+  const anchorArgs = [scriptPath, anchorIdentityDir, '--fail-on', 'broken-anchor', '--baseline', anchorIdentityBaseline];
+  writeFileSync(anchorIdentityDoc, '[same target](a.md?raw#missing)\n');
+  eq(spawnSync(process.execPath, anchorArgs, { encoding: 'utf8' }).status, 0, 'relative spelling and query preserve the target identity');
+  const legacy = JSON.parse(readFileSync(anchorIdentityBaseline, 'utf8'));
+  legacy.entries[0].evidence = 'anchor #missing has no matching heading slug or explicit HTML anchor';
+  writeFileSync(anchorIdentityBaseline, JSON.stringify(legacy));
+  eq(spawnSync(process.execPath, anchorArgs, { encoding: 'utf8' }).status, 1, 'legacy evidence cannot waive a cross-file anchor');
+  writeFileSync(anchorIdentityDoc, '[same file](#missing)\n');
+  eq(spawnSync(process.execPath, anchorArgs, { encoding: 'utf8' }).status, 0, 'legacy same-file evidence still matches');
+  writeFileSync(anchorIdentityDoc, '[one](./a.md#missing) [two](./b.md#missing)\n');
+  const anchorFindings = JSON.parse(runCli([anchorIdentityDir])).candidates;
+  eq(anchorFindings.length, 2, 'the same missing fragment in two targets yields two findings');
+  ok(anchorFindings.some((c) => c.evidence.includes('a.md')) && anchorFindings.some((c) => c.evidence.includes('b.md')),
+    'each anchor diagnostic identifies its target');
+
+  const titleAnchorDir = join(tmp, 'escaped-title-anchor');
+  mkdirSync(titleAnchorDir);
+  writeFileSync(join(titleAnchorDir, 'page.md'), '# Page\n');
+  writeFileSync(join(titleAnchorDir, 'links.md'), [
+    '## See [FAQ](./page.md "a \\"quote\\"")', '', '[valid](#see-faq)', '',
+    "## Read [FAQ](./page.md 'a \\'quote\\'')", '', '[valid](#read-faq)',
+    '', `## HTML <span title="a > b" data-x='c > d'>FAQ</span>`, '', '[valid](#html-faq)',
+    '', '## Compare < 3 > and <span>FAQ</span>', '', '[valid](#compare--3--and-faq)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([titleAnchorDir])).candidates, [], 'escaped quotes in link titles do not alter heading anchors');
+
+  const anchorCollisions = join(tmp, 'heading-anchor-collisions');
+  mkdirSync(anchorCollisions);
+  writeFileSync(join(anchorCollisions, 'headings.md'), [
+    '## Notes', '## Notes-1', '## Notes', '## Notes-2', '## Notes',
+    '[original](#notes) [literal](#notes-1) [second](#notes-2)',
+    '[nested suffix](#notes-2-1) [third](#notes-3)',
+    '<span id="R&amp;D"></span>', '[exact](#R%26D) [wrong case](#r%26d)',
+    '<a name="literal&amp;amp;"></a>', '[once](#literal%26amp%3B)',
+    `<a name="legacy-alias" ID=real-id title='example id="ghost"'></a>`,
+    '[legacy](#legacy-alias) [id](#real-id) [ghost](#ghost)',
+    '<input name="field-name">', '[not an anchor](#field-name)',
+    `<span title='example id="quoted-only"' id=first id=second></span>`,
+    '[first](#first) [second](#second) [quoted text](#quoted-only)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([anchorCollisions])).candidates.filter((c) => c.kind === 'broken-anchor')
+    .map((c) => [c.line, c.evidence]), [
+    [9, 'anchor #r%26d has no matching heading slug or explicit HTML anchor'],
+    [13, 'anchor #ghost has no matching heading slug or explicit HTML anchor'],
+    [15, 'anchor #field-name has no matching heading slug or explicit HTML anchor'],
+    [17, 'anchor #quoted-only has no matching heading slug or explicit HTML anchor'],
+    [17, 'anchor #second has no matching heading slug or explicit HTML anchor'],
+  ], 'heading collisions and real HTML anchor attributes match without promoting attribute text or duplicate attributes');
 
   // ---- 大仓 near-duplicate：精确前缀过滤路径 ----
   const manyNearDir = join(tmp, 'many-near');
@@ -852,6 +1012,22 @@ function runAssertions(tmp) {
     ['2.md', 'near-duplicate of 4.md (Jaccard 0.80)'],
   ], 'threshold is inclusive and nine-line documents are excluded');
 
+  // 公共模板行很多，但实际交集低于阈值；另有相同文档和刚好达标的不同尺寸文档。
+  const denseDir = join(tmp, 'near-dense');
+  mkdirSync(denseDir);
+  const boilerplate = Array.from({ length: 12 }, (_, i) => 'common boilerplate ' + i);
+  for (let i = 0; i < 96; i++) {
+    const body = boilerplate.concat(Array.from({ length: 3 }, (_, j) => 'document ' + i + ' token ' + j));
+    writeFileSync(join(denseDir, 'doc-' + i + '.md'), body.join('\n'));
+    if (i === 0) writeFileSync(join(denseDir, 'clone.md'), body.join('\n'));
+  }
+  writeFileSync(join(denseDir, 'template.md'), boilerplate.join('\n'));
+  const denseScan = JSON.parse(runCli([denseDir]));
+  eq(denseScan, JSON.parse(runCli([denseDir, '--exact-near-duplicates'])),
+    'dense template prefixes preserve every exact candidate and output order');
+  const denseMatches = denseScan.candidates.filter((c) => c.kind === 'near-duplicate-files');
+  eq(denseMatches.length, 98, 'only exact clone and inclusive 12/15 threshold pairs match');
+
   // ---- --report-out 报告草稿 ----
   const reportPath = join(tmp, 'draft-report.json');
   const reportRun = spawnSync(process.execPath, [scriptPath, tmp, '--report-out', reportPath], { encoding: 'utf8' });
@@ -872,8 +1048,21 @@ function runAssertions(tmp) {
     ok(['Critical', 'High', 'Medium', 'Low'].includes(finding.severity), 'report finding has severity');
     eq(finding.action, 'annotate', 'report finding action is annotate');
     ok(typeof finding.evidence === 'string' && finding.evidence.length > 0, 'report finding has evidence');
-    ok(typeof finding.excerpt === 'string' && finding.excerpt.length <= 120, 'report excerpt <= 120 chars');
+    ok(typeof finding.excerpt === 'string' && [...finding.excerpt].length <= 120, 'report excerpt <= 120 chars');
   }
+  const unicodeDir = join(tmp, 'unicode-excerpts');
+  mkdirSync(unicodeDir);
+  const unicodeLine = 'X' + '😀'.repeat(170) + ' TODO';
+  writeFileSync(join(unicodeDir, 'unicode.md'), unicodeLine + '\n');
+  const unicodeReportPath = join(tmp, 'unicode-report.json');
+  const unicodeScan = JSON.parse(runCli([unicodeDir, '--report-out', unicodeReportPath]));
+  const unicodeReport = JSON.parse(readFileSync(unicodeReportPath, 'utf8'));
+  eq(unicodeScan.candidates.map((c) => [c.kind, c.evidence, c.excerpt]),
+    [['placeholder-marker', 'TODO', 'X' + '😀'.repeat(159)]],
+    'scan excerpt takes 160 complete Unicode code points without changing evidence');
+  eq(unicodeReport.findings.map((c) => [c.evidence, c.excerpt]),
+    [['TODO', 'X' + '😀'.repeat(119)]], 'report excerpt takes 120 complete Unicode code points');
+
   const reportWriteFailure = spawnSync(process.execPath,
     [scriptPath, tmp, '--report-out', tmp], { encoding: 'utf8' });
   eq(reportWriteFailure.status, 2, 'report write failure exits 2');
@@ -921,6 +1110,41 @@ function runAssertions(tmp) {
   eq(gateTwoTargets.status, 2, 'two positional targets exit 2');
   ok(gateTwoTargets.stderr.includes('multiple kinds need --fail-on'), 'multiple positional error hints at --fail-on');
 
+  // -- 之后即使目录名与开关一致，也必须按原样作为位置参数读取。
+  const optionNamedDir = join(tmp, '--text');
+  mkdirSync(optionNamedDir);
+  writeFileSync(join(optionNamedDir, 'broken.md'), '[missing](./missing.md)\n');
+  const runFromTmp = (args) => spawnSync(process.execPath, [scriptPath, ...args], { cwd: tmp, encoding: 'utf8' });
+  const literalTarget = runFromTmp(['--fail-on', 'broken-local-link', '--', '--text']);
+  eq(literalTarget.status, 1, 'options before the delimiter still apply to the literal target');
+  eq(JSON.parse(literalTarget.stdout).candidates.map((c) => [c.file, c.kind]),
+    [['broken.md', 'broken-local-link']], 'option-shaped target is scanned as a directory');
+  const tooManyTargets = runFromTmp(['--', '--text', '--include-fixtures']);
+  eq(tooManyTargets.status, 2, 'delimiter preserves the single-target limit');
+  ok(tooManyTargets.stderr.includes('expected at most one target directory'), 'tokens after the delimiter are not parsed as options');
+  const missingValueBeforeEnd = runFromTmp(['--report-out', '--', '--text']);
+  eq(missingValueBeforeEnd.status, 2, 'delimiter is not consumed as an option value');
+  ok(missingValueBeforeEnd.stderr.includes('--report-out requires a file path'), 'missing option value diagnosis is unchanged');
+  const unknownBeforeEnd = runFromTmp(['--not-an-option', '--', '--text']);
+  eq(unknownBeforeEnd.status, 2, 'unknown option before delimiter remains an error');
+  ok(unknownBeforeEnd.stderr.includes('unknown option: --not-an-option'), 'unknown option is diagnosed before delimiter');
+
+  const overflowDir = join(tmp, 'gate-overflow');
+  mkdirSync(overflowDir);
+  const overflowDoc = join(overflowDir, 'links.md');
+  const overflowBaseline = join(tmp, 'overflow-baseline.json');
+  writeFileSync(overflowDoc, '[existing](./missing-existing.md)\n');
+  runCli([overflowDir, '--write-baseline', overflowBaseline]);
+  writeFileSync(overflowDoc, ['[existing](./missing-existing.md)',
+    ...Array.from({ length: 21 }, (_, i) => '[missing](./missing-' + i + '.md)'),
+  ].join('\n'));
+  const overflow = spawnSync(process.execPath, [scriptPath, overflowDir, '--text', '--baseline', overflowBaseline,
+    '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
+  eq(overflow.status, 1, 'text gate still fails with more than 20 new candidates');
+  ok(overflow.stderr.includes('1 baselined candidate(s) ignored'), 'overflow notes distinguish baseline candidates');
+  ok(overflow.stderr.includes('1 more (all candidates are on stdout)'), 'overflow does not promise JSON or a filtered list');
+  ok(overflow.stdout.includes('candidates: 22'), 'stdout retains total candidates including the baseline');
+
   const gateDuplicateKinds = spawnSync(process.execPath,
     [scriptPath, cleanDir, '--fail-on', 'broken-local-link,broken-local-link'], { encoding: 'utf8' });
   eq(gateDuplicateKinds.status, 0, 'duplicate kinds are accepted and deduped');
@@ -958,6 +1182,75 @@ function runAssertions(tmp) {
       '--write-baseline', join(tmp, '.', 'shared-output.json')], { encoding: 'utf8' });
   eq(outputCollision.status, 2, 'report and baseline cannot share an output');
   eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'collision rejected before either write');
+  const reportBeforeBlockedBaseline = spawnSync(process.execPath,
+    [scriptPath, cleanDir, '--report-out', sharedOutput, '--write-baseline', tmp], { encoding: 'utf8' });
+  eq(reportBeforeBlockedBaseline.status, 2, 'a directory cannot be used as the second output');
+  eq(reportBeforeBlockedBaseline.stdout, '', 'invalid second output produces no stdout');
+  eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'invalid second output leaves the first output unchanged');
+  const stagedBaseline = join(tmp, 'staged-baseline.json');
+  for (const method of ['writeFileSync', 'renameSync']) {
+    writeFileSync(sharedOutput, 'sentinel');
+    writeFileSync(stagedBaseline, 'old baseline');
+    const preload = 'import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module";' +
+      'const original=fs.' + method + '; let calls=0; fs.' + method + '=function(p,...args){' +
+      'if(String(p).includes(".md-doc-output-") && ++calls===2) throw new Error("injected second output failure");' +
+      'return original.call(this,p,...args)}; syncBuiltinESMExports();';
+    const failed = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(preload),
+      scriptPath, cleanDir, '--report-out', sharedOutput, '--write-baseline', stagedBaseline], { encoding: 'utf8' });
+    eq(failed.status, 2, 'second output failure exits 2');
+    eq(failed.stdout, '', 'no successful scan output after publication failure');
+    ok(failed.stderr.includes('cannot write baseline file:'), 'second output diagnosis identifies baseline');
+    eq(readFileSync(stagedBaseline, 'utf8'), 'old baseline', 'failed output preserves baseline');
+    eq(readdirSync(tmp).filter((name) => name.startsWith('.md-doc-output-')), [], 'temporary output directories are cleaned');
+    if (method === 'writeFileSync') {
+      eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'failed staging preserves first output');
+    } else {
+      eq(JSON.parse(readFileSync(sharedOutput, 'utf8')).summary.fixed, 0, 'already replaced report is readable');
+      ok(failed.stderr.includes('already updated:') && failed.stderr.includes(sharedOutput), 'partial update is explicitly reported');
+    }
+  }
+  runCli([cleanDir, '--report-out', sharedOutput, '--write-baseline', stagedBaseline]);
+  eq(JSON.parse(readFileSync(stagedBaseline, 'utf8')).entries, [], 'both outputs can be published together');
+  writeFileSync(sharedOutput, 'sentinel');
+
+  const lookupDir = join(tmp, 'lookup-error');
+  const lookupAssets = join(lookupDir, 'node_modules'); // 不在目录采集阶段读取，由链接检查触发。
+  mkdirSync(lookupAssets, { recursive: true });
+  writeFileSync(join(lookupAssets, 'asset.txt'), 'fixture');
+  writeFileSync(join(lookupDir, 'links.md'), '[document](./node_modules/asset.txt)\n');
+  const lookupPreload = 'import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module";' +
+    'const original = fs.readdirSync; fs.readdirSync = function(path, ...args) {' +
+    'if (String(path).toLowerCase() === ' + JSON.stringify(lookupAssets.toLowerCase()) + ') ' +
+    'throw Object.assign(new Error("injected EACCES"), {code: "EACCES"});' +
+    'return original.call(this, path, ...args); }; syncBuiltinESMExports();';
+  const lookupFailed = spawnSync(process.execPath,
+    ['--import', 'data:text/javascript,' + encodeURIComponent(lookupPreload), scriptPath, lookupDir,
+      '--fail-on', 'broken-local-link', '--report-out', sharedOutput], { encoding: 'utf8' });
+  eq(lookupFailed.status, 2, 'cannot read a link parent is a scan error, not a dead link');
+  eq(lookupFailed.stdout, '', 'failed link lookup emits no partial scan');
+  ok(lookupFailed.stderr.includes('cannot read link target directory:') && lookupFailed.stderr.includes('injected EACCES'), 'diagnostic gives the lookup operation and cause');
+  eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'failed link lookup leaves the existing report intact');
+
+  const statCacheDir = join(tmp, 'stat-cache');
+  mkdirSync(statCacheDir);
+  writeFileSync(join(statCacheDir, 'page.md'), '# Page\n');
+  writeFileSync(join(statCacheDir, 'links.md'), [
+    '[markdown](./page.md#page)', '<a href="./page.md?raw#missing">HTML</a>',
+    '[reference][p]', '', '[p]: ./page.md', '[case](./PAGE.md#page)',
+    '[wrong type](./page.md/)',
+  ].join('\n'));
+  const statPreload = 'import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module";' +
+    'const original = fs.statSync; let calls = 0; fs.statSync = function(path, ...args) {' +
+    'if (String(path).toLowerCase() === ' + JSON.stringify(join(statCacheDir, 'page.md').toLowerCase()) + ') calls++;' +
+    'return original.call(this, path, ...args); }; syncBuiltinESMExports();' +
+    'process.on("exit", () => process.stderr.write("target stat calls: " + calls + "\\n"));';
+  const statRun = spawnSync(process.execPath,
+    ['--import', 'data:text/javascript,' + encodeURIComponent(statPreload), scriptPath, statCacheDir], { encoding: 'utf8' });
+  eq(statRun.status, 0, 'repeated target scan succeeds');
+  eq(JSON.parse(statRun.stdout).candidates.map(({ line, kind }) => [line, kind]), [
+    [2, 'broken-anchor'], [6, 'case-mismatch-link'], [7, 'broken-local-link'],
+  ], 'query, anchor, spelling and trailing slash retain independent diagnostics');
+  eq(statRun.stderr.trim(), 'target stat calls: 1', 'resolve target metadata only once per scan');
 
   // 注入文件系统错误，无需依赖宿主权限或修改 ACL，Windows/Linux 均能复验。
   for (const [method, failedPath, expected] of [
@@ -977,6 +1270,32 @@ function runAssertions(tmp) {
     eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'incomplete scan must not write report');
   }
 
+  const encodingDir = join(tmp, 'encoding-input');
+  mkdirSync(encodingDir);
+  const encodingDoc = join(encodingDir, 'encoding.md');
+  const encodingBaseline = join(tmp, 'encoding-baseline.json');
+  const encodingBaselineBody = Buffer.from('{"tool":"md-doc-optimizer-pre-scan-baseline","schema_version":1,"entries":[],"note":"');
+  writeFileSync(encodingDoc, Buffer.from([0x23, 0x20, 0xc3, 0x28, 0x0a]));
+  const malformedMd = spawnSync(process.execPath,
+    [scriptPath, encodingDir, '--report-out', sharedOutput, '--write-baseline', encodingBaseline], { encoding: 'utf8' });
+  eq(malformedMd.status, 2, 'invalid UTF-8 Markdown fails the scan');
+  ok(malformedMd.stderr.includes('invalid UTF-8') && malformedMd.stderr.includes('encoding.md'), 'encoding error identifies the Markdown file');
+  eq(malformedMd.stdout, '', 'invalid Markdown emits no scan result');
+  eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'invalid Markdown leaves existing report intact');
+  throws(() => readFileSync(encodingBaseline), 'invalid Markdown does not create baseline output');
+
+  writeFileSync(encodingDoc, '\uFEFF# 标题😀\r\n\r\nTODO：实际字符 �\r\n');
+  const validEncoding = JSON.parse(runCli([encodingDir]));
+  eq(validEncoding.candidates.map(({ line, kind, excerpt }) => [line, kind, excerpt]),
+    [[3, 'placeholder-marker', 'TODO：实际字符 �']], 'UTF-8 BOM, CRLF, Unicode and literal replacement characters remain valid');
+  writeFileSync(encodingBaseline, Buffer.concat([encodingBaselineBody, Buffer.from([0xff]), Buffer.from('"}')]));
+  const malformedBaseline = spawnSync(process.execPath,
+    [scriptPath, encodingDir, '--fail-on', 'placeholder-marker', '--baseline', encodingBaseline, '--report-out', sharedOutput], { encoding: 'utf8' });
+  eq(malformedBaseline.status, 2, 'invalid UTF-8 baseline fails before scanning');
+  ok(malformedBaseline.stderr.includes('invalid UTF-8') && malformedBaseline.stderr.includes('encoding-baseline.json'), 'encoding error identifies the baseline file');
+  eq(malformedBaseline.stdout, '', 'invalid baseline emits no scan result');
+  eq(readFileSync(sharedOutput, 'utf8'), 'sentinel', 'invalid baseline leaves report intact');
+
   // 三个路径选项保留空值/缺值诊断以及等号形式。
   for (const option of ['--baseline', '--write-baseline', '--report-out']) {
     for (const suffix of [[], [''], ['--text']]) {
@@ -988,6 +1307,22 @@ function runAssertions(tmp) {
     const emptyEquals = spawnSync(process.execPath, [scriptPath, cleanDir, option + '='], { encoding: 'utf8' });
     eq(emptyEquals.status, 2, option + ' rejects empty equals value');
   }
+  const firstPath = join(tmp, 'first-option.json');
+  const secondPath = join(tmp, 'second-option.json');
+  const sentinelBaseline = JSON.stringify({ tool: 'md-doc-optimizer-pre-scan-baseline', schema_version: 1, entries: [] });
+  for (const option of ['--baseline', '--write-baseline', '--report-out']) {
+    writeFileSync(firstPath, sentinelBaseline);
+    writeFileSync(secondPath, sentinelBaseline);
+    const gate = option === '--baseline' ? ['--fail-on', 'broken-local-link'] : [];
+    const repeated = spawnSync(process.execPath,
+      [scriptPath, cleanDir, ...gate, option, firstPath, option + '=' + secondPath], { encoding: 'utf8' });
+    eq(repeated.status, 2, option + ' rejects duplicate separated and equals values');
+    eq(repeated.stderr.trim(), 'pre-scan: ' + option + ' may only be specified once', 'duplicate option diagnostic');
+    eq(repeated.stdout, '', 'duplicate option produces no scan');
+    eq(readFileSync(firstPath, 'utf8'), sentinelBaseline, 'first path is untouched');
+    eq(readFileSync(secondPath, 'utf8'), sentinelBaseline, 'second path is untouched');
+  }
+
   for (const [option, label] of [['--report-out', 'report'], ['--write-baseline', 'baseline']]) {
     const nestedOutput = join(tmp, label + '-nested', 'out.json');
     const written = spawnSync(process.execPath, [scriptPath, cleanDir, option + '=' + nestedOutput], { encoding: 'utf8' });
@@ -1071,13 +1406,97 @@ function runAssertions(tmp) {
   eq(shiftGate.status, 0, 'baseline ignores line-number shifts in evidence');
   ok(shiftGate.stderr.includes('1 baselined candidate(s) ignored'), 'line-shift baseline match is explained');
 
-  // 只归一已知行号型 evidence：路径里字面 "line 12" 不能被归一
+  const paragraphGateDir = join(tmp, 'paragraph-baseline-identity');
+  mkdirSync(paragraphGateDir);
+  const paragraphDoc = join(paragraphGateDir, 'doc.md');
+  const paragraphBaseline = join(tmp, 'paragraph-identity.json');
+  const paragraphPrefix = 'Identical opening text deliberately exceeds the candidate excerpt boundary. '.repeat(3);
+  const writeRepeatedParagraph = (suffix, prefix = '') => {
+    const paragraph = paragraphPrefix + suffix;
+    writeFileSync(paragraphDoc, prefix + paragraph + '\n\n' + paragraph + '\n');
+  };
+  writeRepeatedParagraph('first ending');
+  runCli([paragraphGateDir, '--write-baseline', paragraphBaseline]);
+  const paragraphArgs = [scriptPath, paragraphGateDir, '--fail-on', 'duplicate-paragraph', '--baseline', paragraphBaseline];
+  writeRepeatedParagraph('first ending', '# Introduction\n\n');
+  eq(spawnSync(process.execPath, paragraphArgs, { encoding: 'utf8' }).status, 0, 'same paragraph can move');
+  writeRepeatedParagraph('second ending');
+  const changedParagraph = spawnSync(process.execPath, paragraphArgs, { encoding: 'utf8' });
+  eq(changedParagraph.status, 1, 'another paragraph with the same excerpt is not covered by the baseline');
+  ok(changedParagraph.stderr.includes('1 new candidate(s) matched'), 'different complete paragraph identity is reported');
+
+  const headingArgs = [scriptPath, shiftDir, '--fail-on', 'duplicate-heading', '--baseline', shiftBaselinePath];
+  for (const changed of ['## Examples', '### Notes']) {
+    writeFileSync(join(shiftDir, 'dup.md'), '# Dup\n\n' + changed + '\n\nfirst\n\n' + changed + '\n\nsecond\n');
+    const differentHeading = spawnSync(process.execPath, headingArgs, { encoding: 'utf8' });
+    eq(differentHeading.status, 1, 'different heading text or level is never covered by the old baseline');
+    ok(differentHeading.stderr.includes('1 new candidate(s) matched'), 'new group has its own identity');
+  }
+  writeFileSync(shiftBaselinePath, JSON.stringify({ tool: 'md-doc-optimizer-pre-scan-baseline', schema_version: 1,
+    entries: [{ file: 'dup.md', kind: 'duplicate-heading', evidence: 'repeat of heading at line 3' }] }));
+  const legacyHeading = spawnSync(process.execPath, headingArgs, { encoding: 'utf8' });
+  eq(legacyHeading.status, 1, 'legacy heading entries lacking the heading identity do not waive current candidates');
+
+  const refBaselineDir = join(tmp, 'reference-baseline-identity');
+  mkdirSync(refBaselineDir);
+  const refBaselineDoc = join(refBaselineDir, 'doc.md');
+  const refBaselinePath = join(tmp, 'reference-key-baseline.json');
+  const writeRefBaselineFixture = (label, gap = '') => writeFileSync(refBaselineDoc,
+    gap + '[' + label + ']: https://example.invalid/a\n[' + label + ']: https://example.invalid/b\n\n[missing][' + label + ' missing]\n');
+  writeRefBaselineFixture('Ref Label');
+  runCli([refBaselineDir, '--write-baseline', refBaselinePath]);
+  const refBaselineArgs = [scriptPath, refBaselineDir, '--fail-on',
+    'duplicate-reference-definition,unused-reference-definition,undefined-reference-label', '--baseline', refBaselinePath];
+  writeRefBaselineFixture('ref  label', '# Intro\n\n');
+  eq(spawnSync(process.execPath, refBaselineArgs, { encoding: 'utf8' }).status, 0, 'case and whitespace do not change reference identity');
+  writeRefBaselineFixture('New Label');
+  eq(spawnSync(process.execPath, refBaselineArgs, { encoding: 'utf8' }).status, 1, 'another reference label still fails');
+
+  const h1Dir = join(tmp, 'multiple-h1-identity');
+  mkdirSync(h1Dir);
+  const h1Doc = join(h1Dir, 'doc.md');
+  const h1Base = join(tmp, 'h1-baseline.json');
+  writeFileSync(h1Doc, '# Main\n\n# Extra heading\n');
+  runCli([h1Dir, '--write-baseline', h1Base]);
+  const h1Args = [scriptPath, h1Dir, '--fail-on', 'multiple-h1', '--baseline', h1Base];
+  for (const [text, status] of [
+    ['Preface\n\n# Main\n\n# EXTRA  heading\n', 0],
+    ['# Main\n\n# Different heading\n', 1],
+  ]) {
+    writeFileSync(h1Doc, text);
+    eq(spawnSync(process.execPath, h1Args, { encoding: 'utf8' }).status, status,
+      'multiple H1 baseline preserves the specific additional heading identity');
+  }
+  writeFileSync(h1Base, JSON.stringify({ tool: 'md-doc-optimizer-pre-scan-baseline', schema_version: 1,
+    entries: [{ file: 'doc.md', kind: 'multiple-h1', evidence: 'additional H1; first H1 at line 1' }] }));
+  eq(spawnSync(process.execPath, h1Args, { encoding: 'utf8' }).status, 1, 'legacy ambiguous H1 records do not waive current findings');
+
+  if (process.platform !== 'win32') {
+    const pathIdentityDir = join(tmp, 'path-identity');
+    mkdirSync(join(pathIdentityDir, 'notes'), { recursive: true });
+    mkdirSync(join(pathIdentityDir, 'C:'));
+    for (const file of [join('C:', 'guide.md'), join('notes', 'guide.md'), 'notes\\guide.md']) {
+      writeFileSync(join(pathIdentityDir, file), '[missing](./missing.md)\n');
+    }
+    const pathIdentityReport = join(tmp, 'path-identity-report.json');
+    const pathIdentityBaseline = join(tmp, 'path-identity-baseline.json');
+    const scan = JSON.parse(runCli([pathIdentityDir, '--report-out', pathIdentityReport, '--write-baseline', pathIdentityBaseline]));
+    for (const entries of [scan.candidates, JSON.parse(readFileSync(pathIdentityReport, 'utf8')).findings,
+      JSON.parse(readFileSync(pathIdentityBaseline, 'utf8')).entries]) {
+      eq(entries.map(({ file }) => file), ['C:/guide.md', 'notes/guide.md', 'notes\\guide.md'], 'native colon and backslash names keep their POSIX identity');
+    }
+    const identityGate = spawnSync(process.execPath,
+      [scriptPath, pathIdentityDir, '--fail-on', 'broken-local-link', '--baseline', pathIdentityBaseline], { encoding: 'utf8' });
+    eq(identityGate.status, 0, 'POSIX filename identities round-trip through the baseline');
+  }
+
+  // 路径即使包含与内置诊断相同的行号短语，也必须作为原样证据匹配。
   const normDir = join(tmp, 'baseline-normalize');
   mkdirSync(normDir, { recursive: true });
-  writeFileSync(join(normDir, 'ref.md'), '# Ref\n\n[ref]: <./line 12.md>\n');
+  writeFileSync(join(normDir, 'ref.md'), '# Ref\n\n[ref]: <./already defined at line 12.md>\n');
   const normBaselinePath = join(tmp, 'baseline-normalize.json');
   spawnSync(process.execPath, [scriptPath, normDir, '--write-baseline', normBaselinePath], { encoding: 'utf8' });
-  writeFileSync(join(normDir, 'ref.md'), '# Ref\n\n[ref]: <./line 34.md>\n');
+  writeFileSync(join(normDir, 'ref.md'), '# Ref\n\n[ref]: <./already defined at line 34.md>\n');
   const normGate = spawnSync(process.execPath,
     [scriptPath, normDir, '--fail-on', 'broken-local-link', '--baseline', normBaselinePath], { encoding: 'utf8' });
   eq(normGate.status, 1, 'baseline normalization only applies to line-number evidence, not paths');
@@ -1133,7 +1552,26 @@ function runAssertions(tmp) {
   const baselineAbsoluteFile = spawnSync(process.execPath,
     [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', join(tmp, 'absolute-file-baseline.json')], { encoding: 'utf8' });
   eq(baselineAbsoluteFile.status, 2, 'baseline entry with absolute path exits 2');
-  ok(baselineAbsoluteFile.stderr.includes('repository-relative POSIX path'), 'absolute path message');
+  ok(baselineAbsoluteFile.stderr.includes('scan-root-relative POSIX path'), 'absolute path message');
+
+  const pathBaseline = join(tmp, 'path-baseline.json');
+  for (const file of ['../bad1.md', './bad1.md', 'docs/../bad1.md', 'docs/./bad1.md', 'docs//bad1.md', 'docs/bad1.md/', 'bad\u0000.md']) {
+    writeFileSync(pathBaseline, entryOf({ ...baselineData.entries[0], file }));
+    const result = spawnSync(process.execPath,
+      [scriptPath, baselineDir, '--fail-on', 'broken-local-link', '--baseline', pathBaseline], { encoding: 'utf8' });
+    eq(result.status, 2, 'noncanonical baseline path rejected: ' + JSON.stringify(file));
+    eq(result.stdout, '', 'invalid baseline paths do not produce scan output');
+    ok(result.stderr.includes('relative POSIX path'), 'path validation is explicit');
+  }
+  const namedDir = join(tmp, 'baseline-relative-names');
+  mkdirSync(join(namedDir, '..cache'), { recursive: true });
+  writeFileSync(join(namedDir, '..cache', 'note.md'), '[missing](./missing.md)\n');
+  runCli([namedDir, '--write-baseline', pathBaseline]);
+  const namedBaseline = JSON.parse(readFileSync(pathBaseline, 'utf8'));
+  eq(namedBaseline.entries.map((e) => e.file), ['..cache/note.md'], 'ordinary dotted segments remain valid');
+  const namedGate = spawnSync(process.execPath,
+    [scriptPath, namedDir, '--fail-on', 'broken-local-link', '--baseline', pathBaseline], { encoding: 'utf8' });
+  eq(namedGate.status, 0, 'generated subdirectory baseline round-trips');
 
   const writeBaselineWithGate = spawnSync(process.execPath,
     [scriptPath, baselineDir, '--write-baseline', join(tmp, 'x.json'), '--fail-on', 'broken-local-link'], { encoding: 'utf8' });
@@ -1201,6 +1639,370 @@ function runAssertions(tmp) {
   eq(slashCandidates.map((c) => c.kind), ['broken-local-link'], 'entity-generated backslash is never reinterpreted as Markdown escape');
   ok(slashCandidates[0].evidence.includes('backslash separators'), 'generated slash is rejected instead of resolving a&b.md');
 
+  const namedEntityDir = join(tmp, 'named-entity-boundaries');
+  mkdirSync(namedEntityDir);
+  for (const name of ['literal&constructor;.md', 'literal&Amp;.md', 'a&b.md']) {
+    writeFileSync(join(namedEntityDir, name), '# Destination\n');
+  }
+  writeFileSync(join(namedEntityDir, 'links.md'), [
+    '[unknown](./literal&constructor;.md)',
+    '<a href="./literal&Amp;.md">Mixed case is literal</a>',
+    '[uppercase](./a&AMP;b.md)',
+    '[reference][mixed]', '',
+    '[mixed]: ./literal&Amp;.md', '',
+    '<span id="id&constructor;"></span>',
+    '[anchor](#id%26constructor%3B)',
+    '[missing](./missing&constructor;.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([namedEntityDir])).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [10, 'broken-local-link', 'relative link target not found: ./missing&constructor;.md'],
+  ], 'only exact supported entity names decode; unknown names remain literal in paths, anchors and evidence');
+
+  const numericEntityDir = join(tmp, 'numeric-entity-boundaries');
+  mkdirSync(numericEntityDir);
+  for (const name of ['zero�.md', 'surrogate�.md', 'range�.md', 'astral😀.md', 'decimalA.md', 'hexA.md']) {
+    writeFileSync(join(numericEntityDir, name), '# Destination\n');
+  }
+  writeFileSync(join(numericEntityDir, 'links.md'), [
+    '[zero](./zero&#0;.md)', '[surrogate](./surrogate&#xD800;.md)',
+    '[range][range]', '', '[range]: ./range&#1114112;.md', '',
+    '[astral](./astral&#X1f600;.md)', '[decimal](./decimal&#0000065;.md)',
+    '[hex](./hex&#x000041;.md)', '<a href="./zero&#00000000;.md">HTML decimal</a>',
+    '[long decimal](./decimal&#00000065;.md)', '[long hex](./hex&#x0000041;.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([numericEntityDir])).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [11, 'broken-local-link', 'relative link target not found: ./decimal&'],
+    [12, 'broken-local-link', 'relative link target not found: ./hex&'],
+  ], 'numeric entities reject invalid scalars, preserve astral characters, and respect Markdown digit limits');
+
+  // 显式空引用目标不能借用下一行正文；换行的空/有效目标沿用同一套解析。
+  const refDestinationDir = join(tmp, 'reference-destinations');
+  mkdirSync(refDestinationDir);
+  writeFileSync(join(refDestinationDir, 'target.md'), '# Target\n');
+  writeFileSync(join(refDestinationDir, 'refs.md'), [
+    '[use][empty] and [use][multi-empty] and [use][valid]', '',
+    '[empty]: <> "title"', 'Visible', '',
+    '[multi-empty]:', '  <> "title"', '',
+    '[valid]:', '  <./target.md> "title"',
+  ].join('\n'));
+  const refGate = spawnSync(process.execPath,
+    [scriptPath, refDestinationDir, '--fail-on', 'empty-link-target'], { encoding: 'utf8' });
+  eq(refGate.status, 1, 'explicit empty reference targets fail the empty-target gate');
+  eq(JSON.parse(refGate.stdout).candidates.map((c) => [c.line, c.kind]), [
+    [3, 'empty-link-target'], [6, 'empty-link-target'],
+  ], 'empty same-line and multiline targets are reported on the definition line');
+
+  const titledDir = join(tmp, 'inline-parenthesized-titles');
+  mkdirSync(titledDir);
+  writeFileSync(join(titledDir, 'page.md'), '# Page\n');
+  writeFileSync(join(titledDir, 'image.png'), 'fixture');
+  writeFileSync(join(titledDir, 'links.md'), [
+    '[valid](./page.md (Title))', '![valid](./image.png (Image title))',
+    '[missing](./missing.md (Title))', '![missing](./missing.png (Image title))',
+    '[![badge](./missing-badge.png (Badge title))](./missing-outer.md (Outer title))',
+    '[empty](<> (Title))',
+  ].join('\n'));
+  const titled = JSON.parse(runCli([titledDir]));
+  eq(titled.candidates.map(({ line, kind }) => [line, kind]), [
+    [3, 'broken-local-link'], [4, 'broken-local-image'], [5, 'broken-local-image'],
+    [5, 'broken-local-link'], [6, 'empty-link-target'],
+  ], 'parenthesized titles work for inline links, images and both badge targets');
+
+  const mixedRefDir = join(tmp, 'mixed-reference');
+  mkdirSync(join(mixedRefDir, 'assets'), { recursive: true });
+  writeFileSync(join(mixedRefDir, 'image.png'), 'fixture');
+  writeFileSync(join(mixedRefDir, 'refs.md'), [
+    '[directory][d] ![directory image][d]', '[file][f] ![file image][f]', '',
+    '[d]: ./assets/', '[f]: ./image.png',
+  ].join('\n'));
+  const mixedRef = spawnSync(process.execPath,
+    [scriptPath, mixedRefDir, '--fail-on', 'broken-local-image'], { encoding: 'utf8' });
+  eq(mixedRef.status, 1, 'a link use must not hide a broken image use of the same label');
+  eq(JSON.parse(mixedRef.stdout).candidates.map(({ line, kind }) => [line, kind]),
+    [[4, 'broken-local-image']], 'the directory is only invalid when used as an image');
+
+  const refBoundaryDir = join(tmp, 'reference-boundaries');
+  mkdirSync(refBoundaryDir);
+  writeFileSync(join(refBoundaryDir, 'target.md'), '# Target\n');
+  writeFileSync(join(refBoundaryDir, 'refs.md'), [
+    '[quote][quoted] [list][listed] [next][next] [split][split] [separator][separator]', '',
+    '> [quoted]:', '>   <./target.md> (title)', '',
+    '- [listed]:', '  ./target.md "title"', '',
+    '[split]:', '[next]: ./target.md', '',
+    '> [outside]:', './target.md', '',
+    '- [out-list]:', './target.md', '',
+    '[separator]:', '---', '',
+    '[ordinary text]:', 'A sentence with spaces.', '',
+    '[flat]: ./target.md (title)', '',
+    '[bad-flat]: ./target.md extra prose', '',
+    '[flat][] and [bad-flat][] and [outside][] and [out-list][] and [ordinary text][]',
+  ].join('\n'));
+  const refBoundaryGate = spawnSync(process.execPath,
+    [scriptPath, refBoundaryDir, '--fail-on', 'broken-local-link,empty-link-target'], { encoding: 'utf8' });
+  eq(refBoundaryGate.status, 1, 'invalid definitions still trip the selected structural gate');
+  eq(JSON.parse(refBoundaryGate.stdout).candidates.filter((c) => c.kind !== 'duplicate-link-target').map((c) => [c.line, c.kind]), [
+    [9, 'empty-link-target'], [12, 'empty-link-target'], [15, 'empty-link-target'],
+    [18, 'empty-link-target'], [21, 'empty-link-target'], [26, 'empty-link-target'],
+  ], 'reference targets stop at block boundaries; continuation inside the same container supports titles');
+  ok(JSON.parse(refBoundaryGate.stdout).candidates.some((c) => c.line === 26 && c.evidence.includes('no valid destination')),
+    'malformed nonempty destinations explain why they are not resolved as a path');
+  writeFileSync(join(refBoundaryDir, 'refs.md'), '[used][quoted]\n\n> [quoted]:\n> ./missing.md (title)\n');
+  const missingQuoted = JSON.parse(runCli([refBoundaryDir]));
+  eq(missingQuoted.candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [3, 'broken-local-link', 'relative link target not found: ./missing.md'],
+  ], 'missing paths in valid continuations still report on the definition line');
+
+  const refOrderDir = join(tmp, 'reference-precedence');
+  mkdirSync(refOrderDir);
+  for (const name of ['later.md', 'first.md']) writeFileSync(join(refOrderDir, name), '# ' + name + '\n');
+  const refOrderFile = join(refOrderDir, 'refs.md');
+  const scanRefOrder = () => spawnSync(process.execPath,
+    [scriptPath, refOrderDir, '--fail-on', 'duplicate-link-target'], { encoding: 'utf8' });
+  const uses = '[one][ref] [REF][] [three][Ref]\n\n';
+  for (const first of ['[Ref]: <>', '[Ref]:\n  <> "title"']) {
+    writeFileSync(refOrderFile, uses + first + '\n[ref]: ./later.md\n');
+    const result = scanRefOrder();
+    eq(result.status, 0, 'explicit empty destination is the effective first definition');
+    eq(JSON.parse(result.stdout).candidates.map((c) => c.kind),
+      ['empty-link-target', 'duplicate-reference-definition'], 'empty and duplicate definitions still produce their own candidates');
+  }
+  for (const [first, expected] of [
+    ['[Ref]:', './later.md'], ['[Ref]: invalid trailing text', './later.md'], ['[Ref]: ./first.md', './first.md'],
+  ]) {
+    writeFileSync(refOrderFile, uses + first + '\n\n[ref]: ./later.md\n');
+    const result = scanRefOrder();
+    eq(result.status, 1, 'three actual references to a local destination fail the duplicate gate');
+    eq(JSON.parse(result.stdout).candidates.filter((c) => c.kind === 'duplicate-link-target').map((c) => [c.line, c.evidence]),
+      [[1, 'same link target appears 3 times in this file: ' + expected]], 'first syntactically valid definition determines the target');
+  }
+
+  // 引语围栏不能吞掉引语结束后的正文；setext 下划线不能跨越引语边界。
+  const quoteDir = join(tmp, 'quote-boundaries');
+  mkdirSync(quoteDir);
+  writeFileSync(join(quoteDir, 'fence.md'), [
+    '> ```md', '> TODO hidden', '', 'TODO visible', '',
+    '> ```md', '> TODO still hidden', '> ```', '> TODO quoted',
+  ].join('\n'));
+  writeFileSync(join(quoteDir, 'setext.md'), [
+    '> Not A Heading', '---', '', '[bad](#not-a-heading)', '',
+    '> Earlier Quote', 'Real Heading', '===', '', '[good](#real-heading)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([quoteDir])).candidates.map((c) => [c.file, c.line, c.kind]), [
+    ['fence.md', 4, 'placeholder-marker'],
+    ['fence.md', 9, 'placeholder-marker'],
+    ['setext.md', 4, 'broken-anchor'],
+  ], 'quote boundaries isolate fences and setext heading text');
+
+  // 成对的反斜杠是字面反斜杠，不会转义其后的链接起始括号。
+  const multiLinkDir = join(tmp, 'multiline-inline-links');
+  mkdirSync(multiLinkDir);
+  writeFileSync(join(multiLinkDir, 'valid.md'), '# Valid\n');
+  writeFileSync(join(multiLinkDir, 'links.md'), [
+    '[folded', 'label](./missing.md)', '',
+    '[missing](', './other.md "title")', '',
+    '[valid](', './valid.md', ')', '',
+    '[suppressed]( <!-- pre-scan-ignore -->', './ignored.md)', '',
+    '[split', '', 'label](./not-a-link.md)', '',
+    '[before heading', '## Heading', 'label](./not-a-link.md)', '',
+    '[broken](', './first.md) [another](./second.md)',
+  ].join('\r\n'));
+  const multi = JSON.parse(runCli([multiLinkDir]));
+  eq(multi.candidates.map(({ line, kind }) => [line, kind]), [
+    [1, 'broken-local-link'], [4, 'broken-local-link'], [22, 'broken-local-link'], [23, 'broken-local-link'],
+  ], 'plain paragraph links preserve start lines and do not cross blocks');
+
+  writeFileSync(join(multiLinkDir, 'links.md'), [
+    '[angle](', '<./missing file.md>)', '',
+    '[first', '-', 'text](./not-a-link.md)', '',
+    '[second', '--', 'text](./not-a-link.md)', '',
+    '[HTML', '<div>', 'text](./not-a-link.md)', '</div>',
+  ].join('\n'));
+  eq(JSON.parse(runCli([multiLinkDir])).candidates.map(({ line, evidence }) => [line, evidence]), [
+    [1, 'relative link target not found: ./missing file.md'],
+  ], 'angle destination continuation is accepted but setext and HTML boundaries are not crossed');
+
+  const listFenceDir = join(tmp, 'list-fences');
+  mkdirSync(listFenceDir);
+  writeFileSync(join(listFenceDir, 'list.md'), [
+    '1.  Item', '', '    ~~~md', '    [hidden](./hidden.md)', '    ~~~',
+    '', '[visible](./outside.md)', '', '- ~~~md', '  [hidden](./hidden-again.md)',
+    '', '- [sibling](./sibling.md)', '', '  [continuation](./continued.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([listFenceDir])).candidates.map(({ line, kind }) => [line, kind]),
+    [[7, 'broken-local-link'], [12, 'broken-local-link'], [14, 'broken-local-link']],
+    'list fence uses list indentation and ends at a sibling item');
+  writeFileSync(join(listFenceDir, 'list.md'), [
+    '> - ~~~md', '>   > literal quote', '>   - ~~~', '>   [hidden](./hidden.md)', '>   ~~~',
+    '', '[visible](./after.md)', '', '~~~md', '- ~~~', '[hidden](./hidden-again.md)', '~~~', '', '[visible](./last.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([listFenceDir])).candidates.map(({ line, kind }) => [line, kind]),
+    [[7, 'broken-local-link'], [14, 'broken-local-link']], 'literal quote and list markers inside a fence cannot close it');
+  const parenEscapeDir = join(tmp, 'escaped-parenthesis-targets');
+  mkdirSync(parenEscapeDir);
+  writeFileSync(join(parenEscapeDir, 'open(draft.md'), '# Draft\n');
+  writeFileSync(join(parenEscapeDir, 'links.md'), [
+    '[existing](./open\\(draft.md)', '[missing](./close\\)draft.md)',
+    '[![badge](./logo\\(small.svg)](./open\\(draft.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([parenEscapeDir])).candidates.map(({ line, kind, evidence }) => [line, kind, evidence]), [
+    [2, 'broken-local-link', 'relative link target not found: ./close)draft.md'],
+    [3, 'broken-local-image', 'relative image target not found: ./logo(small.svg'],
+  ], 'escaped parentheses are literal in inline and badge destinations');
+
+  const escapesDir = join(tmp, 'bracket-escape-parity');
+  mkdirSync(escapesDir);
+  writeFileSync(join(escapesDir, 'links.md'), [
+    String.raw`\[literal](./ignored.md)`,
+    String.raw`\\[link](./missing.md)`,
+    String.raw`\\\[literal](./ignored.md)`,
+    String.raw`\\\\[missing reference][unknown]`,
+    String.raw`\\\[literal\]\[unknown\]`,
+  ].join('\n'));
+  const escapesGate = spawnSync(process.execPath,
+    [scriptPath, escapesDir, '--fail-on', 'broken-local-link,undefined-reference-label'], { encoding: 'utf8' });
+  eq(escapesGate.status, 1, 'links preceded by escaped backslashes still fail the gate');
+  eq(JSON.parse(escapesGate.stdout).candidates.map((c) => [c.line, c.kind]), [
+    [2, 'broken-local-link'], [4, 'undefined-reference-label'],
+  ], 'only odd backslash runs escape an opening bracket');
+
+  const htmlBoundaryDir = join(tmp, 'html-tag-boundaries');
+  mkdirSync(htmlBoundaryDir);
+  writeFileSync(join(htmlBoundaryDir, 'ok.md'), '# Existing target\n');
+  writeFileSync(join(htmlBoundaryDir, 'examples.md'), [
+    '<a title="x > y"',
+    'href="./no-link.md">real link</a>',
+    "<img title='x > y'",
+    'src="./no-image.png">',
+    '<source title="x > y"',
+    'srcset="./no-source.png 2x">',
+    '<a href="./ok.md" HREF="./ignored-duplicate.md">duplicate href</a>',
+    '<img src="" SRC="./ignored-duplicate.png">',
+    '<source srcset="data:image/png;base64,AAAA 1x" SRCSET="./ignored-srcset.png 2x">',
+    `<span title="a > b <a href='./ignored-inner.md'>">label</span>`,
+    '<span title="a > b',
+    `<img src='./ignored-inner.png'>">label</span> <a href="./after-tag.md">after</a>`,
+  ].join('\n'));
+  const htmlBoundaryGate = spawnSync(process.execPath,
+    [scriptPath, htmlBoundaryDir, '--fail-on', 'broken-local-link,broken-local-image'], { encoding: 'utf8' });
+  eq(htmlBoundaryGate.status, 1, 'actual links after a quoted greater-than sign fail the gate');
+  eq(JSON.parse(htmlBoundaryGate.stdout).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [1, 'broken-local-link', 'relative link target not found: ./no-link.md'],
+    [3, 'broken-local-image', 'relative image target not found: ./no-image.png'],
+    [5, 'broken-local-image', 'relative image target not found: ./no-source.png'],
+    [12, 'broken-local-link', 'relative link target not found: ./after-tag.md'],
+  ], 'recognize real tag boundaries, ignore attribute text and use only the first occurrence of an attribute');
+
+  const anchorTagsDir = join(tmp, 'html-anchor-boundaries');
+  mkdirSync(anchorTagsDir);
+  writeFileSync(join(anchorTagsDir, 'target.md'), [
+    '<span title="quoted > delimiter"', 'id="MiX&amp;Match" ID="ignored">visible</span>',
+    '<a', "name='Legacy'>old</a>",
+    '<span title="start of an attribute', "<a id='fake'>\">literal tag text</span>",
+    '<span name="not-an-anchor"></span>',
+    '<span id="" ID="empty-first"></span>',
+    '<!-- <span id="commented"></span> -->',
+    '~~~html', '<span id="fenced"></span>', '~~~',
+    '', '[same file](#MiX%26Match)',
+  ].join('\n'));
+  const anchorLinksPath = join(anchorTagsDir, 'links.md');
+  const validAnchorLinks = [
+    '[id](./target.md#MiX%26Match)', '[name](./target.md#Legacy)',
+    '<a href="./target.md#Legacy">HTML link</a>',
+  ];
+  writeFileSync(anchorLinksPath, validAnchorLinks.join('\n'));
+  const anchorGate = () => spawnSync(process.execPath,
+    [scriptPath, anchorTagsDir, '--fail-on', 'broken-anchor'], { encoding: 'utf8' });
+  const validAnchors = anchorGate();
+  eq(validAnchors.status, 0, 'multiline explicit anchors resolve in same-file and cross-file links');
+  eq(JSON.parse(validAnchors.stdout).candidates, [], 'valid multiline anchor fixture has no candidates');
+  const invalidAnchors = ['mix%26match', 'ignored', 'fake', 'not-an-anchor', 'empty-first', 'commented', 'fenced'];
+  writeFileSync(anchorLinksPath, [...validAnchorLinks, ...invalidAnchors.map((id) => '[missing](./target.md#' + id + ')')].join('\n'));
+  const invalidGate = anchorGate();
+  eq(invalidGate.status, 1, 'false anchors remain invalid with the structural gate');
+  eq(JSON.parse(invalidGate.stdout).candidates.map(({ file, line, kind, evidence }) => [file, line, kind, evidence]),
+    invalidAnchors.map((id, i) => ['links.md', i + 4, 'broken-anchor', 'anchor #' + id + ' in "target.md" has no matching heading slug or explicit HTML anchor']),
+    'anchor attributes are case-sensitive, use the first value and ignore non-rendered tags');
+
+  // 徽章外层链接与其他链接形式共用重复计数；图片路径本身不计。
+  const mixedMarkupDir = join(tmp, 'mixed-html-destinations');
+  mkdirSync(mixedMarkupDir);
+  writeFileSync(join(mixedMarkupDir, 'links.md'), [
+    '[missing](<LICENSE>)',
+    '<span title="[example](./not-a-target.md) [empty]()">[body](./body.md)</span>',
+    '[title](./bad.md "<a href=\'./not-a-target.md\'>")',
+  ].join('\n'));
+  eq(JSON.parse(runCli([mixedMarkupDir])).candidates.map(({ line, kind, evidence }) => [line, kind, evidence]), [
+    [1, 'broken-local-link', 'relative link target not found: LICENSE'],
+    [2, 'broken-local-link', 'relative link target not found: ./body.md'],
+    [3, 'broken-local-link', 'relative link target not found: ./bad.md'],
+  ], 'angle destinations and Markdown body links remain visible without parsing attribute examples');
+  writeFileSync(join(mixedMarkupDir, 'links.md'), [
+    `<span title="<!-- literal">Label</span>`,
+    '<a href="./a`b`.md">literal</a>',
+    `<span title="start`,
+    '[example]: ./not-a-target.md',
+    `end">Text</span>`,
+    '', '> <pre>', '> [hidden](./hidden.md)', '', '[after](./after.md)', '',
+    'Use `code` [ordinary', 'link](./visible.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([mixedMarkupDir])).candidates.map(({ line, evidence }) => [line, evidence]), [
+    [2, 'relative link target not found: ./a`b`.md'],
+    [10, 'relative link target not found: ./after.md'],
+    [12, 'relative link target not found: ./visible.md'],
+  ], 'inline HTML delimiters, quoted definitions and container termination preserve normal links');
+
+  const duplicateForms = join(tmp, 'duplicate-target-forms');
+  mkdirSync(duplicateForms);
+  writeFileSync(join(duplicateForms, 'guide.md'), '# Guide\n');
+  writeFileSync(join(duplicateForms, 'links.md'), [
+    '[inline](guide.md)', '<a href="./guide.md">HTML</a>', '[Guide]',
+    '![Guide]', '[Guide] <!-- pre-scan-ignore -->', '[unresolved]', '',
+    '[Guide]: ././guide.md', '',
+    '[query](./guide.md?raw)', '[fragment](./guide.md#guide)', '[case](./GUIDE.md)',
+  ].join('\n'));
+  const forms = JSON.parse(runCli([duplicateForms])).candidates;
+  eq(forms.map(({ line, kind, evidence }) => [line, kind, kind === 'duplicate-link-target' ? evidence : '']), [
+    [1, 'duplicate-link-target', 'same link target appears 3 times in this file: guide.md'],
+    [12, 'case-mismatch-link', ''],
+  ], 'resolved shortcuts and leading ./ aliases count together without including images, suppression, query, fragment or casing variants');
+  writeFileSync(join(duplicateForms, 'links.md'), [
+    '[Guide] [Guide] [Guide] [undefined-shortcut]', '', '[Guide]: <>', '[Guide]: ./guide.md',
+  ].join('\n'));
+  eq(JSON.parse(runCli([duplicateForms])).candidates.map(({ kind }) => kind), ['empty-link-target', 'duplicate-reference-definition'],
+    'the first empty definition prevents shortcuts from falling through to a later target');
+
+  writeFileSync(join(duplicateForms, 'links.md'), [
+    '<span title="[Guide]">x</span>', '<span title="[Guide]">[Guide]</span>',
+    '<span title="begin', '[Guide]">x</span>', '[Guide]', '', '[Guide]: ./guide.md',
+  ].join('\n'));
+  eq(JSON.parse(runCli([duplicateForms])).candidates, [], 'HTML attribute text does not add shortcuts');
+  writeFileSync(join(duplicateForms, 'links.md'), [
+    '<span title="[Guide]">[Guide]</span>', '[Guide]', '[Guide]', '', '[Guide]: ./guide.md',
+  ].join('\n'));
+  eq(JSON.parse(runCli([duplicateForms])).candidates.map(({ line, evidence }) => [line, evidence]),
+    [[1, 'same link target appears 3 times in this file: ./guide.md']], 'HTML-tagged body text is still eligible');
+  const duplicateAliasBase = join(tmp, 'duplicate-alias.json');
+  runCli([duplicateForms, '--write-baseline', duplicateAliasBase]);
+  writeFileSync(join(duplicateForms, 'links.md'), '[one](guide.md) [two](./guide.md) [three](././guide.md)\n');
+  const aliasGate = spawnSync(process.execPath, [scriptPath, duplicateForms, '--fail-on', 'duplicate-link-target',
+    '--baseline', duplicateAliasBase], { encoding: 'utf8' });
+  eq(aliasGate.status, 0, 'changed leading ./ diagnostic spelling preserves a known duplicate target');
+  ok(aliasGate.stderr.includes('1 baselined candidate(s) ignored'), 'baseline notes count the unchanged duplicate');
+
+  const badgeDir = join(tmp, 'badge-duplicates');
+  mkdirSync(badgeDir);
+  writeFileSync(join(badgeDir, 'target.md'), '# Target\n');
+  writeFileSync(join(badgeDir, 'badge.svg'), '<svg/>');
+  writeFileSync(join(badgeDir, 'links.md'), [
+    '[![ignored](./badge.svg)](./target.md) <!-- pre-scan-ignore -->',
+    '[![badge](./badge.svg)](./target.md)',
+    '<a href="./target.md">HTML</a>',
+    '[inline](./target.md)',
+  ].join('\n'));
+  eq(JSON.parse(runCli([badgeDir])).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [2, 'duplicate-link-target', 'same link target appears 3 times in this file: ./target.md'],
+  ], 'outer badge link counts once and suppressed badge does not count');
+
   // HTML 注释在所有正文检测通路里都不可见；保留注释后的正文和原始行号。
   const commentDir = join(tmp, 'comment-prose');
   mkdirSync(commentDir);
@@ -1222,7 +2024,7 @@ function runAssertions(tmp) {
     [6, 'stale-time-phrase', 'soon'],
     [8, 'placeholder-marker', 'TODO'],
     [8, 'stale-time-phrase', 'currently'],
-    [18, 'duplicate-paragraph', 'repeat of paragraph at line 16'],
+    [18, 'duplicate-paragraph', paragraphEvidence(16, longProse)],
   ], 'hidden prose is ignored; visible prose after comments and literal comment delimiters in code remain checked');
   const commentGate = spawnSync(process.execPath, [scriptPath, commentDir, '--fail-on', 'placeholder-marker'], { encoding: 'utf8' });
   eq(commentGate.status, 1, 'visible placeholder still fails gate');
@@ -1236,6 +2038,18 @@ function runAssertions(tmp) {
   const hiddenGate = spawnSync(process.execPath, [scriptPath, commentDir, '--fail-on', 'placeholder-marker,stale-time-phrase'], { encoding: 'utf8' });
   eq(hiddenGate.status, 0, 'hidden phrases cannot fail gate');
   eq(JSON.parse(hiddenGate.stdout).candidates, [], 'hidden-only document has no candidates');
+
+  writeFileSync(commentFile, [
+    '<!-- `hidden --> TODO `',
+    '', '<!--', '`hidden --> FIXME `',
+    '', '<!-- first --> <!--', '`hidden --> <!-- pre-scan-ignore --> TBD `',
+    'TODO visible',
+  ].join('\n'));
+  eq(JSON.parse(runCli([commentDir])).candidates.map((c) => [c.line, c.kind, c.evidence]), [
+    [1, 'placeholder-marker', 'TODO'],
+    [4, 'placeholder-marker', 'FIXME'],
+    [8, 'placeholder-marker', 'TODO'],
+  ], 'backticks in HTML comments cannot hide their closing delimiter or visible prose');
 
   const similarityDir = join(tmp, 'comment-similarity');
   mkdirSync(similarityDir);

@@ -41,6 +41,10 @@
             "enum": ["delete", "replace", "annotate", "keep"],
             "description": "delete 删除；replace 改写；annotate 标注 NEEDS_HUMAN/DUBIOUS；keep 判定不改"
           },
+          "application_status": {
+            "enum": ["proposed", "applied"],
+            "description": "仅用于 delete/replace。proposed 为建议，applied 为已应用并复验；省略表示未记录。"
+          },
           "excerpt": { "type": "string", "maxLength": 120, "description": "原文摘要（可选，不超过 120 字）" },
           "evidence": {
             "type": "string",
@@ -53,6 +57,10 @@
           }
         },
         "allOf": [
+          {
+            "if": { "required": ["application_status"] },
+            "then": { "properties": { "action": { "enum": ["delete", "replace"] } } }
+          },
           {
             "if": { "properties": { "action": { "const": "replace" } } },
             "then": {

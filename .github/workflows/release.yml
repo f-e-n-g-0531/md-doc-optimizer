@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号，例如 v1.4.0（留空使用当前提交最近可达 tag）'
+        description: '版本号（v1.17.0 起，例如 v1.18.1；留空使用当前提交最近可达 tag）'
         required: false
 
 permissions:
@@ -41,6 +41,8 @@ jobs:
     uses: ./.github/workflows/docs-qa.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
+      legacy_missing_self_tests: ${{ needs.resolve.outputs.version == 'v1.17.0' }}
+      legacy_missing_application_tests: ${{ needs.resolve.outputs.version == 'v1.17.0' || needs.resolve.outputs.version == 'v1.18.0' || needs.resolve.outputs.version == 'v1.18.1' }}
 
   release:
     needs: [resolve, qa]

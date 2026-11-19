@@ -3,23 +3,7 @@ name: docs-qa
 on:
   push:
     branches: [main]
-    paths:
-      - "**.md"
-      - "**.markdown"
-      - ".markdownlint.yml"
-      - "lychee.toml"
-      - ".github/workflows/docs-qa.yml"
-      - "scripts/**"
-      - "**.json"
   pull_request:
-    paths:
-      - "**.md"
-      - "**.markdown"
-      - ".markdownlint.yml"
-      - "lychee.toml"
-      - ".github/workflows/docs-qa.yml"
-      - "scripts/**"
-      - "**.json"
 
   workflow_call:
     inputs:
@@ -28,6 +12,16 @@ on:
         required: false
         type: string
         default: ""
+      legacy_missing_self_tests:
+        description: Allow missing self-tests only for the v1.17.0 release checkout
+        required: false
+        type: boolean
+        default: false
+      legacy_missing_application_tests:
+        description: Skip application schema fixtures for known historical releases
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -42,40 +36,61 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: markdownlint
-        run: npx --yes markdownlint-cli2 "**/*.md"
+        run: npx --yes markdownlint-cli2@0.24.1 "**/*.{md,markdown}"
 
       - name: docs consistency self-test
-        if: ${{ hashFiles('scripts/check-docs.test.mjs') != '' }}
+        if: ${{ !inputs.legacy_missing_self_tests || hashFiles('scripts/check-docs.test.mjs') != '' }}
         run: node scripts/check-docs.test.mjs
 
       - name: docs consistency
         run: node scripts/check-docs.mjs
 
       - name: release target self-test
-        if: ${{ hashFiles('scripts/release-target.test.mjs') != '' }}
+        if: ${{ !inputs.legacy_missing_self_tests || hashFiles('scripts/release-target.test.mjs') != '' }}
         run: node scripts/release-target.test.mjs
 
       - name: pre-scan self-test
         run: node scripts/pre-scan.test.mjs
 
       - name: pre-scan contract & gate
+        id: pre_scan
         run: |
-          node scripts/pre-scan.mjs . > "$RUNNER_TEMP/pre-scan-out.json"
+          gate_status=0
+          node scripts/pre-scan.mjs . --report-out "$RUNNER_TEMP/pre-scan-report.json" --fail-on broken-local-link,broken-local-image,broken-anchor,link-outside-root,case-mismatch-link,empty-link-target,undefined-reference-label > "$RUNNER_TEMP/pre-scan-out.json" || gate_status=$?
+          if [ "$gate_status" -gt 1 ]; then exit "$gate_status"; fi
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/pre-scan.schema.json -d "$RUNNER_TEMP/pre-scan-out.json"
-          node scripts/pre-scan.mjs . --report-out "$RUNNER_TEMP/pre-scan-report.json" > "$RUNNER_TEMP/pre-scan-report-scan.json"
           npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "$RUNNER_TEMP/pre-scan-report.json"
-          node scripts/pre-scan.mjs . --fail-on broken-local-link,broken-local-image,broken-anchor,link-outside-root,case-mismatch-link,empty-link-target,undefined-reference-label
+          if [ "$gate_status" -ne 0 ]; then
+            printf '%s\n' 'Pre-scan structural gate failed; see candidate diagnostics above.' >&2
+            exit "$gate_status"
+          fi
+
+      - name: retain failed pre-scan outputs
+        if: ${{ failure() && steps.pre_scan.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-scan-diagnostics
+          path: |
+            ${{ runner.temp }}/pre-scan-out.json
+            ${{ runner.temp }}/pre-scan-report.json
+          if-no-files-found: ignore
 
       - name: validate report schema
         run: npx --yes ajv-cli@5 validate --spec=draft2020 -s references/report.schema.json -d "examples/*.json"
 
+      - name: report application status contract
+        if: ${{ !inputs.legacy_missing_application_tests }}
+        run: |
+          npx --yes ajv-cli@5 test --spec=draft2020 -s references/report.schema.json -d examples/report-application/partial.valid.json --valid
+          npx --yes ajv-cli@5 test --spec=draft2020 -s references/report.schema.json -d examples/report-application/annotation.invalid.json -d examples/report-application/unknown-status.invalid.json --invalid
+
       - name: check-links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --config ./lychee.toml --no-progress '**/*.md'
+          args: --config ./lychee.toml --no-progress '**/*.md' '**/*.markdown'
           fail: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

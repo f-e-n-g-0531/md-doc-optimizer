@@ -1,0 +1,30 @@
+{
+  "summary": {
+    "files_audited": 1,
+    "examined": 2,
+    "fixed": 1,
+    "needs_human": 0,
+    "no_action": 0
+  },
+  "findings": [
+    {
+      "file": "doc.md",
+      "line": 2,
+      "category": "C",
+      "severity": "High",
+      "action": "replace",
+      "evidence": "命令输出证实旧参数不可用",
+      "replacement": "新参数",
+      "application_status": "applied"
+    },
+    {
+      "file": "doc.md",
+      "line": 3,
+      "category": "A",
+      "severity": "Medium",
+      "action": "delete",
+      "evidence": "与第一节重复",
+      "application_status": "unknown"
+    }
+  ]
+}

@@ -1,31 +1,41 @@
 #!/usr/bin/env node
 // 仓库自洽检查：版本号、引用关系、README 目录树必须跟实际文件同步。
 // 运行：node scripts/check-docs.mjs（CI 的 docs-qa 工作流会跑）。
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, dirname, basename, relative } from 'node:path';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join, dirname, basename, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { skillFrontmatter, metadataVersion, latestChangelogVersion } from './skill-version.mjs';
+import { CATEGORY, decodeUtf8, fencedSectionBody, inlineMarkdownTargetsIn, inspectLocalPath, splitLinkTarget } from './pre-scan.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const errors = [];
-const rel = (p) => relative(root, p).split('\\').join('/');
+const rel = (p) => relative(root, p).split(sep).join('/');
 const abs = (p) => join(root, p);
 
 function read(relPath) {
-  if (!existsSync(abs(relPath))) {
-    errors.push(`缺失文件: ${relPath}`);
-    return '';
+  let bytes;
+  try {
+    bytes = readFileSync(abs(relPath));
+  } catch (err) {
+    errors.push(err.code === 'ENOENT' ? '缺失文件: ' + relPath : '无法读取文件: ' + relPath + ' (' + err.message + ')');
+    return undefined;
   }
-  return readFileSync(abs(relPath), 'utf8');
+  try {
+    return decodeUtf8(bytes);
+  } catch (err) {
+    errors.push(relPath + ' 不是有效 UTF-8');
+    return undefined;
+  }
 }
 
 // 1) SKILL.md frontmatter 的 name/version 与实际目录、CHANGELOG 一致
 const skill = read('SKILL.md');
-const fm = skill.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+const fm = skill === undefined ? undefined : skillFrontmatter(skill);
 if (!fm) {
-  errors.push('SKILL.md 缺少 frontmatter');
+  if (skill !== undefined) errors.push('SKILL.md 缺少 frontmatter');
 } else {
-  const name = fm[1].match(/^name:\s*(\S+)/m);
-  const version = fm[1].match(/^\s+version:\s*"([^"]+)"/m);
+  const name = fm.match(/^name:\s*(\S+)/m);
+  const version = metadataVersion(fm);
   if (!name) {
     errors.push('SKILL.md frontmatter 缺少 name');
   } else if (name[1] !== basename(root)) {
@@ -35,18 +45,20 @@ if (!fm) {
     errors.push('SKILL.md frontmatter 缺少 metadata.version');
   } else {
     const changelog = read('CHANGELOG.md');
-    const latest = changelog.match(/^##\s+(\d+\.\d+\.\d+)/m);
-    if (!latest) {
-      errors.push('CHANGELOG.md 找不到版本标题（形如 ## 1.4.0）');
-    } else if (latest[1] !== version[1]) {
-      errors.push(`版本不一致: SKILL.md ${version[1]} vs CHANGELOG.md ${latest[1]}`);
+    if (changelog !== undefined) {
+      const latest = latestChangelogVersion(changelog);
+      if (!latest) {
+        errors.push('CHANGELOG.md 找不到版本标题（形如 ## 1.4.0）');
+      } else if (latest !== version) {
+        errors.push(`版本不一致: SKILL.md ${version} vs CHANGELOG.md ${latest}`);
+      }
     }
   }
 }
 
 // 2) SKILL.md 引用的文件必须存在
 const referenced = new Set();
-for (const m of skill.matchAll(/references\/[A-Za-z0-9._-]+/g)) referenced.add(m[0]);
+for (const m of (skill ?? '').matchAll(/references\/[A-Za-z0-9._-]+/g)) referenced.add(m[0]);
 for (const r of referenced) {
   if (!existsSync(abs(r))) errors.push(`SKILL.md 引用了不存在的文件: ${r}`);
 }
@@ -62,70 +74,93 @@ if (existsSync(refDir)) {
 mustReference.push('references/report.schema.json');
 mustReference.push('references/pre-scan.schema.json');
 for (const r of mustReference) {
-  if (!skill.includes(r)) errors.push(`${r} 未被 SKILL.md 引用`);
+  if (skill !== undefined && !skill.includes(r)) errors.push(`${r} 未被 SKILL.md 引用`);
 }
 
 // 4) README 目录结构必须覆盖仓库文件（按层级还原完整相对路径）
-const readme = read('README.md').replace(/\r\n/g, '\n');
-const treeMatch = readme.match(/##\s*目录结构[^\n]*\n+~~~\w*\n([\s\S]*?)~~~/);
-const tree = treeMatch ? treeMatch[1] : readme;
-if (!treeMatch) errors.push('README.md 找不到「目录结构」围栏块');
-const listedPaths = new Set();
+const readme = read('README.md');
+const tree = readme === undefined ? undefined : fencedSectionBody(readme, '目录结构');
+if (readme !== undefined && tree === undefined) errors.push('README.md 找不到「目录结构」围栏块');
+const listedFiles = new Set();
+const listedDirs = new Set();
 const parents = [];
-for (const line of tree.split('\n')) {
+function recordTreeEntry(path, entries) {
+  if (listedFiles.has(path) || listedDirs.has(path)) errors.push('README 目录结构重复列出: ' + path);
+  entries.add(path);
+}
+for (const line of (tree ?? '').split('\n')) {
   const entry = line.match(/^((?:│   |    )*)[├└]──\s+(.+?)(?:\s+#.*)?$/);
   if (!entry) continue;
   const depth = entry[1].length / 4;
+  if (depth > parents.length) {
+    errors.push('README 目录结构层级无效: ' + line.trim());
+    continue;
+  }
   const name = entry[2].trim();
   parents.length = depth;
-  const prefix = parents.filter(Boolean).join('/');
+  const prefix = parents.length ? parents.join('/') + '/' : '';
   if (name.endsWith('/')) {
-    parents[depth] = name.replace(/\/$/, '');
+    const dir = name.slice(0, -1);
+    recordTreeEntry(prefix + dir, listedDirs);
+    parents.push(dir);
   } else {
-    for (const file of name.split(/\s+\/\s+/)) {
-      listedPaths.add((prefix ? prefix + '/' : '') + file);
-    }
+    for (const file of name.split(/\s+\/\s+/)) recordTreeEntry(prefix + file, listedFiles);
   }
 }
 const ignore = new Set(['.git', '.gitignore', 'node_modules']);
-function walk(dir, out = []) {
-  for (const f of readdirSync(dir)) {
-    if (ignore.has(f)) continue;
-    const p = join(dir, f);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else out.push(rel(p));
+const actualFiles = new Set();
+const actualDirs = new Set();
+function walk(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (ignore.has(entry.name)) continue;
+    const p = join(dir, entry.name);
+    // 目录链接（含 Windows junction）本身是条目，不进入它的目标。
+    if (entry.isDirectory()) {
+      actualDirs.add(rel(p));
+      walk(p);
+    } else {
+      actualFiles.add(rel(p));
+    }
   }
-  return out;
 }
-for (const f of walk(root)) {
-  if (f.endsWith('README.md') || f.endsWith('SKILL.md') || f.endsWith('LICENSE') || f.endsWith('CHANGELOG.md')) continue;
-  if (!listedPaths.has(f)) errors.push(`README 目录结构未列出: ${f}`);
+if (tree !== undefined) walk(root);
+const optionalRootEntries = new Set(['README.md', 'SKILL.md', 'LICENSE', 'CHANGELOG.md']);
+for (const f of actualFiles) {
+  if (!optionalRootEntries.has(f) && !listedFiles.has(f)) errors.push('README 目录结构未列出: ' + f);
+}
+for (const f of listedFiles) {
+  if (!actualFiles.has(f)) errors.push('README 目录结构列出了不存在的文件: ' + f);
+}
+for (const d of listedDirs) {
+  if (!actualDirs.has(d)) errors.push('README 目录结构列出了不存在的目录: ' + d);
 }
 
-// 5) README 的本地相对链接必须存在
-// 平衡圆括号按一层嵌套识别；无法完整闭合的目标保守跳过，宁可漏查不可误报
-for (const m of readme.matchAll(/\]\(\.\/((?:[^()#\s]|\([^()#\s]*\))*)(?:#[^)\s]*)?\)/g)) {
-  if (!existsSync(abs(m[1]))) errors.push(`README 本地链接失效: ${m[1]}`);
+// 5) README 的 ./ 内联目标与预扫共用磁盘解析；锚点及引用另行核对。
+const readmeTargetStats = new Map();
+for (const { target, image } of inlineMarkdownTargetsIn(readme ?? '')) {
+  if (!target.startsWith('./')) continue;
+  const { pathPart, decodedPath } = splitLinkTarget(target);
+  const result = inspectLocalPath(abs(decodedPath), decodedPath, image, readmeTargetStats);
+  const diagnostic = 'README 本地链接失效: ' + pathPart.slice(2);
+  if (result.error) errors.push(diagnostic + ' (' + result.error + ')');
+  else if (result.mismatch) errors.push(diagnostic + ' (case differs: ' + result.mismatch.linked + ' -> ' + result.mismatch.disk + ')');
 }
 
 // 6) schema 与示例必须是合法 JSON；保留解析结果，供契约校验复用
 const parsedJson = new Map();
 for (const p of ['references/report.schema.json', 'references/pre-scan.schema.json', 'examples/report.sample.json']) {
+  const content = read(p);
+  if (content === undefined) continue;
   try {
-    parsedJson.set(p, JSON.parse(read(p)));
+    parsedJson.set(p, JSON.parse(content));
   } catch (e) {
     errors.push(`${p} 不是合法 JSON: ${e.message}`);
   }
 }
 
 // 7) 预扫 schema 的 kind 枚举与类别映射必须与 scripts/pre-scan.mjs 的 CATEGORY 一致
-const preScanSrc = read('scripts/pre-scan.mjs');
-const categoryBlock = preScanSrc.match(/const CATEGORY = \{([\s\S]*?)\n\};/);
-if (!categoryBlock) {
-  errors.push('scripts/pre-scan.mjs 找不到 CATEGORY 定义');
-} else {
-  const scriptKinds = new Map();
-  for (const m of categoryBlock[1].matchAll(/'([a-z0-9-]+)':\s*'([ABC])'/g)) scriptKinds.set(m[1], m[2]);
+{
+  const scriptKinds = new Map(Object.entries(CATEGORY));
   const schemaPath = 'references/pre-scan.schema.json';
   const preScanSchema = parsedJson.get(schemaPath);
   const def = preScanSchema && preScanSchema.$defs && preScanSchema.$defs.candidate;
@@ -158,6 +193,12 @@ if (!categoryBlock) {
       required.every((key) => Object.hasOwn(value, key)) &&
       Object.keys(value).every((key) => required.includes(key) ||
         (annotations.has(key) && typeof value[key] === 'string'));
+    const categorySchema = def.properties?.category;
+    const categories = [...new Set(scriptKinds.values())].sort();
+    if (!hasShape(categorySchema, ['enum']) || !Array.isArray(categorySchema.enum) ||
+        JSON.stringify([...categorySchema.enum].sort()) !== JSON.stringify(categories)) {
+      errors.push('pre-scan schema 的 candidate.category 枚举必须匹配 CATEGORY');
+    }
     const isMappingBranch = (branch, property, conditional) => {
       if (!hasShape(branch, conditional ? ['properties', 'required'] : ['properties'])) return false;
       const properties = branch.properties;
